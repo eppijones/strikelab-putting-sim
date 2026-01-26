@@ -1,6 +1,12 @@
 """
 Calibration module for StrikeLab Putting Sim.
-Handles homography computation for world coordinate mapping.
+Handles coordinate mapping from pixels to real-world units.
+
+Supports two modes:
+1. AUTO mode: Uses golf ball size (42.67mm) for automatic calibration
+2. MANUAL mode: Uses homography from 4-point calibration
+
+AUTO mode is preferred for consumer use - no setup required.
 """
 
 import cv2
@@ -8,8 +14,12 @@ import numpy as np
 import logging
 from typing import Optional, Tuple, List
 from dataclasses import dataclass
+from collections import deque
 
 logger = logging.getLogger(__name__)
+
+# Golf ball diameter is standardized by USGA/R&A
+GOLF_BALL_DIAMETER_M = 0.04267  # 42.67mm
 
 
 @dataclass
@@ -22,6 +32,109 @@ class CalibrationResult:
     forward_direction_deg: float = 0.0
     error_message: Optional[str] = None
 
+
+class AutoCalibrator:
+    """
+    Automatic calibration using golf ball size.
+    
+    Since golf balls have a standardized diameter (42.67mm), we can
+    automatically compute the pixel-to-meter scale by measuring the
+    detected ball radius in pixels.
+    
+    This provides "just works" calibration with no user input required.
+    """
+    
+    def __init__(self, stabilization_frames: int = 30):
+        """
+        Args:
+            stabilization_frames: Number of consistent readings before accepting calibration
+        """
+        self._radius_history: deque[float] = deque(maxlen=stabilization_frames)
+        self._pixels_per_meter: Optional[float] = None
+        self._is_calibrated = False
+        self._calibration_confidence = 0.0
+        self._last_ball_radius: Optional[float] = None
+        
+    def update(self, ball_radius_px: float, ball_confidence: float) -> bool:
+        """
+        Update auto-calibration with a new ball detection.
+        
+        Args:
+            ball_radius_px: Detected ball radius in pixels
+            ball_confidence: Detection confidence [0, 1]
+            
+        Returns:
+            True if calibration is stable and ready to use
+        """
+        # Only use high-confidence detections
+        if ball_confidence < 0.8:
+            return self._is_calibrated
+        
+        # Filter out obviously wrong radii (too small or too large)
+        # At typical distances, ball should be 15-50 pixels radius
+        if ball_radius_px < 10 or ball_radius_px > 80:
+            return self._is_calibrated
+        
+        self._radius_history.append(ball_radius_px)
+        self._last_ball_radius = ball_radius_px
+        
+        # Need enough samples
+        if len(self._radius_history) < 10:
+            return False
+        
+        # Check stability - radius should be consistent
+        radii = np.array(self._radius_history)
+        mean_radius = np.mean(radii)
+        std_radius = np.std(radii)
+        
+        # Coefficient of variation should be low (< 10%)
+        cv = std_radius / mean_radius if mean_radius > 0 else 1.0
+        
+        if cv < 0.10:  # Stable readings
+            # Compute pixels_per_meter from ball diameter
+            ball_diameter_px = mean_radius * 2
+            self._pixels_per_meter = ball_diameter_px / GOLF_BALL_DIAMETER_M
+            self._is_calibrated = True
+            self._calibration_confidence = 1.0 - cv
+            
+            logger.info(f"Auto-calibration: radius={mean_radius:.1f}px, "
+                       f"pixels_per_meter={self._pixels_per_meter:.1f}, "
+                       f"confidence={self._calibration_confidence:.2f}")
+            return True
+        
+        return self._is_calibrated
+    
+    def pixel_to_meter(self, distance_px: float) -> Optional[float]:
+        """Convert pixel distance to meters."""
+        if not self._is_calibrated or self._pixels_per_meter is None:
+            return None
+        return distance_px / self._pixels_per_meter
+    
+    def meter_to_pixel(self, distance_m: float) -> Optional[float]:
+        """Convert meter distance to pixels."""
+        if not self._is_calibrated or self._pixels_per_meter is None:
+            return None
+        return distance_m * self._pixels_per_meter
+    
+    @property
+    def is_calibrated(self) -> bool:
+        return self._is_calibrated
+    
+    @property
+    def pixels_per_meter(self) -> float:
+        return self._pixels_per_meter or 0.0
+    
+    @property
+    def confidence(self) -> float:
+        return self._calibration_confidence
+    
+    def reset(self):
+        """Reset calibration state."""
+        self._radius_history.clear()
+        self._is_calibrated = False
+        self._calibration_confidence = 0.0
+        # Keep last known pixels_per_meter as fallback
+        
 
 class Calibrator:
     """

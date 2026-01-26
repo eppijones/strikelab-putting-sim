@@ -220,12 +220,35 @@ class BallTracker:
     MAX_POSITION_JUMP_PX = 100      # Large jump = ball placement, not shot
     MIN_SHOT_FRAMES = 5             # Minimum frames for valid shot
     
-    def __init__(self, detector: Optional[BallDetector] = None):
+    def __init__(
+        self, 
+        detector: Optional[BallDetector] = None,
+        motion_threshold_px: Optional[float] = None,
+        motion_confirm_frames: Optional[int] = None,
+        stopped_velocity_threshold: Optional[float] = None,
+        stopped_confirm_frames: Optional[int] = None,
+        cooldown_duration_ms: Optional[int] = None,
+        idle_ema_alpha: Optional[float] = None
+    ):
         self._state = ShotState.ARMED
         self._lane = TrackerLane.IDLE
         
         # Optional detector for ROI-based tracking
         self._detector = detector
+        
+        # Apply config overrides (if provided, use them; otherwise use class constants)
+        if motion_threshold_px is not None:
+            self.MOTION_THRESHOLD_PX = motion_threshold_px
+        if motion_confirm_frames is not None:
+            self.MOTION_CONFIRM_FRAMES = motion_confirm_frames
+        if stopped_velocity_threshold is not None:
+            self.STOPPED_VELOCITY_THRESHOLD = stopped_velocity_threshold
+        if stopped_confirm_frames is not None:
+            self.STOPPED_CONFIRM_FRAMES = stopped_confirm_frames
+        if cooldown_duration_ms is not None:
+            self.COOLDOWN_DURATION_MS = cooldown_duration_ms
+        if idle_ema_alpha is not None:
+            self.IDLE_EMA_ALPHA = idle_ema_alpha
         
         # Position tracking
         self._current_pos: Optional[Tuple[float, float]] = None
@@ -263,6 +286,7 @@ class BallTracker:
         # Shot result
         self._shot_result: Optional[ShotResult] = None
         self._impact_velocity: Optional[Velocity] = None
+        self._shot_start_pos: Optional[Tuple[float, float]] = None  # Position where shot started
         
         # ROI for motion lane tracking
         self._roi: Optional[Tuple[int, int, int, int]] = None  # x, y, w, h
@@ -627,6 +651,11 @@ class BallTracker:
     def _transition_to_tracking(self, frame_id: int):
         """Transition from ARMED to TRACKING."""
         logger.info(f"ARMED -> TRACKING at frame {frame_id}")
+        
+        # Store the shot start position BEFORE clearing anything
+        # This is where the ball was when the putt started
+        self._shot_start_pos = self._current_pos
+        
         self._state = ShotState.TRACKING
         self._lane = TrackerLane.MOTION
         self._motion_start_frame = frame_id
@@ -635,8 +664,19 @@ class BallTracker:
         self._motion_trigger_count = 0
         self._stopped_count = 0
         
-        # Clear raw trajectory for clean velocity computation
+        # Clear BOTH trajectories for clean tracking of this shot
+        self._trajectory.clear()
         self._raw_trajectory.clear()
+        
+        # Add the start position as first point of the new trajectory
+        if self._shot_start_pos:
+            self._trajectory.append(TrackPoint(
+                x=self._shot_start_pos[0],
+                y=self._shot_start_pos[1],
+                timestamp_ns=0,  # Will be updated on next frame
+                frame_id=frame_id,
+                confidence=1.0
+            ))
         
         # Clear locked position - no longer needed in motion
         self._locked_pos = None
@@ -645,6 +685,8 @@ class BallTracker:
         # Clear motion start tracking
         if hasattr(self, '_motion_start_pos'):
             del self._motion_start_pos
+        
+        logger.info(f"Shot started at position: {self._shot_start_pos}")
     
     def _check_tracking_to_stopped(self, frame_id: int):
         """Check if ball has stopped moving."""
@@ -694,17 +736,25 @@ class BallTracker:
         else:
             duration_ms = 0.0
         
+        # Log trajectory info for debugging
+        if trajectory_points:
+            start_pos = trajectory_points[0]
+            end_pos = trajectory_points[-1]
+            distance_px = np.sqrt((end_pos[0] - start_pos[0])**2 + (end_pos[1] - start_pos[1])**2)
+            logger.info(f"Trajectory: {len(trajectory_points)} points, "
+                       f"start={start_pos}, end={end_pos}, distance={distance_px:.1f}px")
+        
         self._shot_result = ShotResult(
             initial_speed_px_s=initial_speed,
             initial_direction_deg=initial_direction,
             frames_to_tracking=frames_to_tracking,
             frames_to_speed=frames_to_speed,
-            trajectory=trajectory_points[-100:],  # Last 100 points
+            trajectory=trajectory_points,  # Full trajectory (no longer slicing)
             duration_ms=duration_ms
         )
         
         logger.info(f"Shot result: speed={initial_speed:.1f}px/s, dir={initial_direction:.1f}°, "
-                   f"frames_to_speed={frames_to_speed}")
+                   f"frames_to_speed={frames_to_speed}, trajectory_points={len(trajectory_points)}")
     
     def _transition_to_cooldown(self, timestamp_ns: int):
         """Transition from STOPPED to COOLDOWN."""
@@ -772,6 +822,7 @@ class BallTracker:
         self._velocity_history.clear()
         self._velocity = None
         self._shot_result = None
+        self._shot_start_pos = None
         self._background.reset()
         self._roi = None
         self._foreground_delta = 0.0

@@ -35,6 +35,14 @@ class PuttingSimApp {
         this.calibrating = false;
         this.calibrationPoints = [];
         
+        // Ruler measurement mode
+        this.rulerMode = false;
+        this.rulerPoints = [];
+        this.rulerResult = null;
+        
+        // Last shot distance
+        this.lastShotDistance = null;
+        
         // FPS tracking
         this.dispFrameCount = 0;
         this.lastDispFpsUpdate = performance.now();
@@ -56,6 +64,7 @@ class PuttingSimApp {
             ballX: document.getElementById('ball-x'),
             ballY: document.getElementById('ball-y'),
             calibrationStatus: document.getElementById('calibration-status'),
+            pixelsPerMeter: document.getElementById('pixels-per-meter'),
             calibrateBtn: document.getElementById('calibrate-btn'),
             resetBtn: document.getElementById('reset-btn'),
             calibrationModal: document.getElementById('calibration-modal'),
@@ -65,7 +74,19 @@ class PuttingSimApp {
             calCancel: document.getElementById('cal-cancel'),
             calApply: document.getElementById('cal-apply'),
             videoFeed: document.getElementById('video-feed'),
-            showVideo: document.getElementById('show-video')
+            showVideo: document.getElementById('show-video'),
+            // Shot distance
+            shotDistance: document.getElementById('shot-distance'),
+            shotStart: document.getElementById('shot-start'),
+            shotEnd: document.getElementById('shot-end'),
+            // Ruler
+            rulerDistance: document.getElementById('ruler-distance'),
+            rulerPixels: document.getElementById('ruler-pixels'),
+            rulerBtn: document.getElementById('ruler-btn'),
+            rulerClear: document.getElementById('ruler-clear'),
+            rulerCorrection: document.getElementById('ruler-correction'),
+            actualDistance: document.getElementById('actual-distance'),
+            applyCorrection: document.getElementById('apply-correction')
         };
         
         this.showVideoFeed = true;
@@ -246,9 +267,11 @@ class PuttingSimApp {
             this.ballVelocity.vy = 0;
         }
         
-        // Store shot result
+        // Store shot result and fetch distance
         if (data.shot) {
             this.lastShot = data.shot;
+            // Fetch detailed shot distance measurement
+            this.fetchLastShotDistance();
         }
         
         // Store prediction
@@ -300,7 +323,35 @@ class PuttingSimApp {
         }
         
         // Calibration status
-        this.elements.calibrationStatus.textContent = data.calibrated ? 'Calibrated' : 'Not calibrated';
+        if (data.auto_calibrated) {
+            this.elements.calibrationStatus.textContent = 'Auto';
+            this.elements.calibrationStatus.classList.add('auto');
+        } else if (data.calibrated) {
+            this.elements.calibrationStatus.textContent = 'Manual';
+            this.elements.calibrationStatus.classList.remove('auto');
+        } else {
+            this.elements.calibrationStatus.textContent = 'Waiting...';
+            this.elements.calibrationStatus.classList.remove('auto');
+        }
+        
+        // Pixels per meter from WebSocket data
+        if (this.elements.pixelsPerMeter && data.pixels_per_meter) {
+            this.elements.pixelsPerMeter.textContent = data.pixels_per_meter.toFixed(0);
+        }
+        
+        // Shot distance from WebSocket data (no need for separate API call)
+        if (data.shot && data.shot.distance_cm !== undefined) {
+            this.elements.shotDistance.textContent = data.shot.distance_cm.toFixed(1);
+            this.elements.shotDistance.classList.add('highlight');
+            
+            // Update start/end positions
+            if (data.shot.trajectory && data.shot.trajectory.length >= 2) {
+                const start = data.shot.trajectory[0];
+                const end = data.shot.trajectory[data.shot.trajectory.length - 1];
+                this.elements.shotStart.textContent = `(${start[0].toFixed(0)}, ${start[1].toFixed(0)})`;
+                this.elements.shotEnd.textContent = `(${end[0].toFixed(0)}, ${end[1].toFixed(0)})`;
+            }
+        }
         
         // Display FPS (update every 500ms)
         this.dispFrameCount++;
@@ -324,13 +375,29 @@ class PuttingSimApp {
             this.resetTracker();
         });
         
-        // Canvas click for calibration - attach to container to catch all clicks
+        // Ruler buttons
+        this.elements.rulerBtn.addEventListener('click', () => {
+            this.toggleRulerMode();
+        });
+        
+        this.elements.rulerClear.addEventListener('click', () => {
+            this.clearRuler();
+        });
+        
+        this.elements.applyCorrection.addEventListener('click', () => {
+            this.applyCalibrationCorrection();
+        });
+        
+        // Canvas click for calibration and ruler - attach to container to catch all clicks
         const container = document.getElementById('canvas-container');
         container.addEventListener('click', (e) => {
+            // Ignore clicks on the modal
+            if (e.target.closest('.modal')) return;
+            
             if (this.calibrating) {
-                // Ignore clicks on the modal
-                if (e.target.closest('.modal')) return;
                 this.addCalibrationPoint(e);
+            } else if (this.rulerMode) {
+                this.addRulerPoint(e);
             }
         });
         
@@ -342,6 +409,215 @@ class PuttingSimApp {
         this.elements.calApply.addEventListener('click', () => {
             this.applyCalibration();
         });
+    }
+    
+    // ==================== RULER MODE ====================
+    
+    toggleRulerMode() {
+        this.rulerMode = !this.rulerMode;
+        
+        if (this.rulerMode) {
+            this.elements.rulerBtn.textContent = 'Click Points...';
+            this.elements.rulerBtn.classList.add('active');
+            this.canvas.style.cursor = 'crosshair';
+            this.canvas.style.pointerEvents = 'auto';
+            this.canvas.classList.add('interactive');
+            this.rulerPoints = [];
+            this.rulerResult = null;
+        } else {
+            this.elements.rulerBtn.textContent = 'Start Ruler';
+            this.elements.rulerBtn.classList.remove('active');
+            this.canvas.style.cursor = 'default';
+            this.canvas.style.pointerEvents = 'none';
+            this.canvas.classList.remove('interactive');
+        }
+    }
+    
+    clearRuler() {
+        this.rulerPoints = [];
+        this.rulerResult = null;
+        this.elements.rulerDistance.textContent = '--';
+        this.elements.rulerPixels.textContent = '--';
+        this.elements.rulerClear.style.display = 'none';
+        this.elements.rulerCorrection.style.display = 'none';
+        this.rulerMode = false;
+        this.elements.rulerBtn.textContent = 'Start Ruler';
+        this.elements.rulerBtn.classList.remove('active');
+        this.canvas.style.cursor = 'default';
+        this.canvas.style.pointerEvents = 'none';
+        this.canvas.classList.remove('interactive');
+    }
+    
+    async applyCalibrationCorrection() {
+        if (!this.rulerResult || !this.rulerResult.distance_cm) {
+            alert('No measurement to correct. Click two points first.');
+            return;
+        }
+        
+        const actualCm = parseFloat(this.elements.actualDistance.value);
+        if (isNaN(actualCm) || actualCm <= 0) {
+            alert('Please enter a valid distance in cm');
+            return;
+        }
+        
+        const measuredCm = this.rulerResult.distance_cm;
+        
+        console.log(`Correction: measured ${measuredCm}cm should be ${actualCm}cm`);
+        
+        try {
+            const response = await fetch('/api/calibrate/correct-scale', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    measured_cm: measuredCm,
+                    actual_cm: actualCm
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                const scaleFactor = result.scale_factor;
+                alert(`Calibration corrected!\n\nScale factor: ${scaleFactor.toFixed(3)}x\nOld: ${result.old_pixels_per_meter.toFixed(1)} px/m\nNew: ${result.new_pixels_per_meter.toFixed(1)} px/m\n\nMeasure again to verify.`);
+                
+                // Update UI
+                this.elements.pixelsPerMeter.textContent = result.new_pixels_per_meter.toFixed(0);
+                this._calibrationFetched = false;  // Force refresh
+                
+                // Clear ruler for fresh measurement
+                this.clearRuler();
+            } else {
+                alert('Correction failed: ' + result.error);
+            }
+        } catch (e) {
+            console.error('Correction error:', e);
+            alert('Correction error: ' + e.message);
+        }
+    }
+    
+    addRulerPoint(event) {
+        // Only allow 2 points
+        if (this.rulerPoints.length >= 2) {
+            console.log('Already have 2 points, click Clear to start over');
+            return;
+        }
+        
+        // Get click position relative to video feed
+        const video = this.elements.videoFeed;
+        const rect = video.getBoundingClientRect();
+        const clickX = event.clientX - rect.left;
+        const clickY = event.clientY - rect.top;
+        
+        // Convert to original image coordinates
+        const scaleX = this.width / rect.width;
+        const scaleY = this.height / rect.height;
+        const x = clickX * scaleX;
+        const y = clickY * scaleY;
+        
+        this.rulerPoints.push([x, y]);
+        console.log(`Ruler point ${this.rulerPoints.length}: (${x.toFixed(1)}, ${y.toFixed(1)})`);
+        
+        // Update button text
+        if (this.rulerPoints.length === 1) {
+            this.elements.rulerBtn.textContent = 'Click 2nd point...';
+        }
+        
+        if (this.rulerPoints.length === 2) {
+            // Measure distance and exit ruler mode
+            this.measureRulerDistance();
+        }
+    }
+    
+    async measureRulerDistance() {
+        if (this.rulerPoints.length < 2) return;
+        
+        const p1 = this.rulerPoints[0];
+        const p2 = this.rulerPoints[1];
+        
+        try {
+            const response = await fetch('/api/measure/distance', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    point1: p1,
+                    point2: p2
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                this.rulerResult = result;
+                
+                // Update UI
+                this.elements.rulerDistance.textContent = result.distance_cm.toFixed(1);
+                this.elements.rulerDistance.classList.add('highlight');
+                this.elements.rulerPixels.textContent = result.distance_px.toFixed(0);
+                this.elements.rulerClear.style.display = 'block';
+                
+                // Show correction panel - user can enter actual distance
+                this.elements.rulerCorrection.style.display = 'block';
+                
+                // Exit ruler mode
+                this.rulerMode = false;
+                this.elements.rulerBtn.textContent = 'Start Ruler';
+                this.elements.rulerBtn.classList.remove('active');
+                this.canvas.style.cursor = 'default';
+                this.canvas.style.pointerEvents = 'none';
+                this.canvas.classList.remove('interactive');
+                
+                console.log('Ruler measurement:', result);
+            } else {
+                console.error('Measurement failed:', result.error);
+            }
+        } catch (e) {
+            console.error('Measurement error:', e);
+        }
+    }
+    
+    // ==================== SHOT DISTANCE ====================
+    
+    async fetchLastShotDistance() {
+        try {
+            const response = await fetch('/api/measure/last-shot');
+            const result = await response.json();
+            
+            if (result.success) {
+                this.lastShotDistance = result;
+                this.updateShotDistanceUI(result);
+            }
+        } catch (e) {
+            console.error('Failed to fetch shot distance:', e);
+        }
+    }
+    
+    updateShotDistanceUI(data) {
+        if (!data) return;
+        
+        this.elements.shotDistance.textContent = data.distance_cm.toFixed(1);
+        this.elements.shotDistance.classList.add('highlight');
+        
+        if (data.start_px && data.end_px) {
+            this.elements.shotStart.textContent = `(${data.start_px[0].toFixed(0)}, ${data.start_px[1].toFixed(0)})`;
+            this.elements.shotEnd.textContent = `(${data.end_px[0].toFixed(0)}, ${data.end_px[1].toFixed(0)})`;
+        }
+    }
+    
+    async fetchCalibrationInfo() {
+        // Only fetch once per session to avoid spamming
+        if (this._calibrationFetched) return;
+        
+        try {
+            const response = await fetch('/api/config');
+            const result = await response.json();
+            
+            if (result.calibration && result.calibration.pixels_per_meter) {
+                this.elements.pixelsPerMeter.textContent = result.calibration.pixels_per_meter.toFixed(0);
+                this._calibrationFetched = true;
+            }
+        } catch (e) {
+            console.error('Failed to fetch calibration info:', e);
+        }
     }
     
     startCalibration() {
@@ -449,6 +725,11 @@ class PuttingSimApp {
         // Draw calibration points if calibrating
         if (this.calibrating) {
             this.drawCalibrationPoints();
+        }
+        
+        // Draw ruler points and line
+        if (this.rulerPoints.length > 0 || this.rulerResult) {
+            this.drawRuler();
         }
         
         // Draw trail
@@ -575,6 +856,83 @@ class PuttingSimApp {
                 this.ctx.closePath();
             }
             this.ctx.stroke();
+        }
+    }
+    
+    drawRuler() {
+        const points = this.rulerPoints;
+        const result = this.rulerResult;
+        
+        // Draw ruler points
+        this.ctx.fillStyle = '#fbbf24';  // Yellow/orange
+        this.ctx.strokeStyle = '#fff';
+        this.ctx.lineWidth = 2;
+        
+        points.forEach((point, i) => {
+            const [x, y] = point;
+            
+            // Draw crosshair
+            this.ctx.strokeStyle = '#fbbf24';
+            this.ctx.lineWidth = 2;
+            this.ctx.beginPath();
+            this.ctx.moveTo(x - 15, y);
+            this.ctx.lineTo(x + 15, y);
+            this.ctx.moveTo(x, y - 15);
+            this.ctx.lineTo(x, y + 15);
+            this.ctx.stroke();
+            
+            // Draw point
+            this.ctx.fillStyle = '#fbbf24';
+            this.ctx.beginPath();
+            this.ctx.arc(x, y, 6, 0, Math.PI * 2);
+            this.ctx.fill();
+            
+            // Draw label
+            this.ctx.fillStyle = '#fff';
+            this.ctx.font = 'bold 14px sans-serif';
+            this.ctx.fillText((i + 1).toString(), x + 18, y + 5);
+        });
+        
+        // Draw line between points
+        if (points.length >= 2) {
+            const [x1, y1] = points[0];
+            const [x2, y2] = points[1];
+            
+            // Main measurement line
+            this.ctx.strokeStyle = '#fbbf24';
+            this.ctx.lineWidth = 3;
+            this.ctx.beginPath();
+            this.ctx.moveTo(x1, y1);
+            this.ctx.lineTo(x2, y2);
+            this.ctx.stroke();
+            
+            // Draw distance label in the middle
+            if (result) {
+                const midX = (x1 + x2) / 2;
+                const midY = (y1 + y2) / 2;
+                
+                // Background for label
+                const label = `${result.distance_cm.toFixed(1)} cm`;
+                this.ctx.font = 'bold 16px sans-serif';
+                const metrics = this.ctx.measureText(label);
+                const padding = 6;
+                
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                this.ctx.fillRect(
+                    midX - metrics.width / 2 - padding,
+                    midY - 12 - padding,
+                    metrics.width + padding * 2,
+                    24 + padding
+                );
+                
+                // Label text
+                this.ctx.fillStyle = '#fbbf24';
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                this.ctx.fillText(label, midX, midY);
+                this.ctx.textAlign = 'left';
+                this.ctx.textBaseline = 'alphabetic';
+            }
         }
     }
     

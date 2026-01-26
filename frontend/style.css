@@ -268,6 +268,39 @@ body {
     color: var(--text-primary);
 }
 
+.btn-ruler {
+    background: var(--warning);
+    color: #000;
+}
+
+.btn-ruler:hover {
+    background: #fcd34d;
+}
+
+.btn-ruler.active {
+    background: var(--success);
+    color: #000;
+}
+
+.helper-text {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+.metric .value.small {
+    font-size: 0.75rem;
+}
+
+.value.highlight {
+    color: var(--warning);
+    font-size: 1.1rem;
+}
+
+.value.auto {
+    color: var(--success);
+}
+
 /* Modal */
 .modal {
     position: fixed;
