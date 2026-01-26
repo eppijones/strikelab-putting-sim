@@ -1,0 +1,66 @@
+{
+  "camera": {
+    "width": 1280,
+    "height": 800,
+    "fps": 120,
+    "device_id": 0,
+    "exposure": -6,
+    "auto_exposure": false
+  },
+  "detector": {
+    "white_lower_h": 0,
+    "white_lower_s": 0,
+    "white_lower_v": 200,
+    "white_upper_h": 180,
+    "white_upper_s": 50,
+    "white_upper_v": 255,
+    "min_radius": 15,
+    "max_radius": 45,
+    "min_area": 700,
+    "max_area": 6000,
+    "min_circularity": 0.85
+  },
+  "tracker": {
+    "motion_threshold_px": 5.0,
+    "motion_confirm_frames": 2,
+    "stopped_velocity_threshold": 50.0,
+    "stopped_confirm_frames": 10,
+    "cooldown_duration_ms": 500,
+    "idle_ema_alpha": 0.05
+  },
+  "calibration": {
+    "version": 1,
+    "homography_matrix": [
+      [
+        0.0011490726608448373,
+        2.929647010652577e-05,
+        -0.574547723494127
+      ],
+      [
+        -6.240400791964144e-05,
+        0.0025835259278731548,
+        -0.4767728609068523
+      ],
+      [
+        -2.081209492103254e-05,
+        -0.00014074437353571933,
+        0.9999999999999999
+      ]
+    ],
+    "pixels_per_meter": 875.8184814453125,
+    "origin_px": [
+      495,
+      196
+    ],
+    "forward_direction_deg": 1.3836866617202759,
+    "created_at": "2026-01-26T19:48:05.950519Z"
+  },
+  "prediction": {
+    "friction_coefficient": 0.15,
+    "min_velocity_threshold": 10.0,
+    "max_prediction_time_s": 10.0
+  },
+  "server_host": "0.0.0.0",
+  "server_port": 8000,
+  "websocket_path": "/ws"
+}

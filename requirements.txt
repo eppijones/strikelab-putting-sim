@@ -1,0 +1,14 @@
+# StrikeLab Putting Sim - Dependencies
+# Python 3.11+
+
+# Core
+opencv-python>=4.9.0
+numpy>=1.26.0
+
+# Web server
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+websockets>=12.0
+
+# Utilities
+pydantic>=2.5.0
