@@ -366,7 +366,7 @@ async def root():
 
 @app.get("/api/video")
 async def video_feed():
-    """MJPEG video stream for viewing camera output at ~30fps."""
+    """MJPEG video stream for viewing camera output at ~60fps with low latency."""
     
     def generate_frames():
         import cv2
@@ -374,10 +374,10 @@ async def video_feed():
         last_frame_time = 0
         
         while sim._running:
-            # Limit to ~30fps for browser display
+            # Increased to ~60fps for lower perceived latency
             now = time.time()
-            if now - last_frame_time < 1/30:
-                time.sleep(0.005)
+            if now - last_frame_time < 1/60:
+                time.sleep(0.002)
                 continue
             last_frame_time = now
             
@@ -412,8 +412,8 @@ async def video_feed():
                         cv2.putText(frame, f"{speed_ms:.2f} m/s", (10, 70),
                                    cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
                 
-                # Encode as JPEG
-                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                # Encode as JPEG - lower quality for faster encoding/transfer
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
     

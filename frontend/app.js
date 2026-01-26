@@ -23,6 +23,14 @@ class PuttingSimApp {
         this.lastShot = null;
         this.prediction = null;
         
+        // Smoothing/interpolation for real-time tracking
+        this.smoothedBall = { x: null, y: null, radius: 12 };
+        this.targetBall = { x: null, y: null, radius: 12 };
+        this.ballVelocity = { vx: 0, vy: 0 };
+        this.lastUpdateTime = performance.now();
+        this.smoothingFactor = 0.3;  // Higher = faster response (0-1)
+        this.useVelocityPrediction = true;
+        
         // Calibration mode
         this.calibrating = false;
         this.calibrationPoints = [];
@@ -196,7 +204,28 @@ class PuttingSimApp {
             }
         }
         
+        // Update target ball position for smoothing
+        if (data.ball && data.ball.x_px !== null) {
+            this.targetBall.x = data.ball.x_px;
+            this.targetBall.y = data.ball.y_px;
+            this.targetBall.radius = data.ball.radius_px || 12;
+            
+            // Initialize smoothed position if not set
+            if (this.smoothedBall.x === null) {
+                this.smoothedBall.x = this.targetBall.x;
+                this.smoothedBall.y = this.targetBall.y;
+                this.smoothedBall.radius = this.targetBall.radius;
+            }
+            
+            // Store velocity for prediction-based smoothing
+            if (data.velocity) {
+                this.ballVelocity.vx = data.velocity.vx_px_s;
+                this.ballVelocity.vy = data.velocity.vy_px_s;
+            }
+        }
+        
         // Update trail - only during TRACKING or STOPPED (not ARMED to avoid jitter lines)
+        // Use smoothed position for smoother trail
         if (data.ball && data.ball.x_px !== null && (data.state === 'TRACKING' || data.state === 'STOPPED')) {
             this.trail.push({
                 x: data.ball.x_px,
@@ -209,9 +238,12 @@ class PuttingSimApp {
             }
         }
         
-        // Clear trail when transitioning to ARMED (after COOLDOWN)
+        // Clear trail and reset smoothing when transitioning to ARMED (after COOLDOWN)
         if (data.state === 'ARMED') {
             this.trail = [];
+            // Reset velocity when idle
+            this.ballVelocity.vx = 0;
+            this.ballVelocity.vy = 0;
         }
         
         // Store shot result
@@ -228,6 +260,9 @@ class PuttingSimApp {
         
         // Update UI
         this.updateUI(data);
+        
+        // Record update time for interpolation
+        this.lastUpdateTime = performance.now();
     }
     
     updateUI(data) {
@@ -395,6 +430,12 @@ class PuttingSimApp {
     }
     
     render() {
+        const now = performance.now();
+        const dt = (now - this.lastUpdateTime) / 1000;  // seconds since last WebSocket update
+        
+        // Update smoothed ball position with interpolation
+        this.updateSmoothedBall(dt);
+        
         // Clear canvas
         this.ctx.clearRect(0, 0, this.width, this.height);
         
@@ -413,14 +454,21 @@ class PuttingSimApp {
         // Draw trail
         this.drawTrail();
         
-        // Draw ball
-        if (this.state && this.state.ball && this.state.ball.x_px !== null) {
-            this.drawBall(this.state.ball);
+        // Draw ball using smoothed position
+        if (this.smoothedBall.x !== null) {
+            this.drawBall({
+                x_px: this.smoothedBall.x,
+                y_px: this.smoothedBall.y,
+                radius_px: this.smoothedBall.radius
+            });
         }
         
         // Draw velocity vector
         if (this.state && this.state.velocity && this.state.state === 'TRACKING') {
-            this.drawVelocity(this.state.ball, this.state.velocity);
+            this.drawVelocity(
+                { x_px: this.smoothedBall.x, y_px: this.smoothedBall.y },
+                this.state.velocity
+            );
         }
         
         // Draw shot trajectory
@@ -435,6 +483,40 @@ class PuttingSimApp {
         
         // Request next frame
         requestAnimationFrame(() => this.render());
+    }
+    
+    updateSmoothedBall(dt) {
+        if (this.targetBall.x === null || this.smoothedBall.x === null) return;
+        
+        // Calculate predicted position based on velocity (for when tracking)
+        let predictedX = this.targetBall.x;
+        let predictedY = this.targetBall.y;
+        
+        // Use velocity prediction during tracking for smoother following
+        if (this.useVelocityPrediction && this.state && this.state.state === 'TRACKING') {
+            // Predict where the ball should be based on velocity and time since last update
+            // Clamp dt to avoid huge jumps
+            const clampedDt = Math.min(dt, 0.1);
+            predictedX = this.targetBall.x + this.ballVelocity.vx * clampedDt;
+            predictedY = this.targetBall.y + this.ballVelocity.vy * clampedDt;
+        }
+        
+        // Exponential smoothing towards predicted/target position
+        // Use faster smoothing during tracking, slower when idle
+        const isTracking = this.state && this.state.state === 'TRACKING';
+        const factor = isTracking ? 0.5 : this.smoothingFactor;
+        
+        this.smoothedBall.x += (predictedX - this.smoothedBall.x) * factor;
+        this.smoothedBall.y += (predictedY - this.smoothedBall.y) * factor;
+        this.smoothedBall.radius += (this.targetBall.radius - this.smoothedBall.radius) * factor;
+        
+        // Snap to target if very close (avoid endless micro-movements)
+        const dx = predictedX - this.smoothedBall.x;
+        const dy = predictedY - this.smoothedBall.y;
+        if (dx * dx + dy * dy < 0.5) {
+            this.smoothedBall.x = predictedX;
+            this.smoothedBall.y = predictedY;
+        }
     }
     
     drawGrid() {
