@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>StrikeLab - Putting Sim (LAB v1)</title>
+    <title>StrikeLab - Putting Sim</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -40,14 +40,14 @@
                     <span class="unit">m/s</span>
                 </div>
                 <div class="metric">
+                    <span class="label">Distance:</span>
+                    <span id="shot-distance" class="value">--</span>
+                    <span class="unit">cm</span>
+                </div>
+                <div class="metric">
                     <span class="label">Direction:</span>
                     <span id="direction-value" class="value">--</span>
                     <span class="unit">°</span>
-                </div>
-                <div class="metric">
-                    <span class="label">Frames to Speed:</span>
-                    <span id="frames-to-speed" class="value">--</span>
-                    <span class="unit">f</span>
                 </div>
             </section>
 
@@ -64,11 +64,6 @@
                     <span class="unit">fps</span>
                 </div>
                 <div class="metric">
-                    <span class="label">DISP:</span>
-                    <span id="disp-fps" class="value">--</span>
-                    <span class="unit">fps</span>
-                </div>
-                <div class="metric">
                     <span class="label">Latency:</span>
                     <span id="proc-latency" class="value">--</span>
                     <span class="unit">ms</span>
@@ -78,108 +73,21 @@
             <section class="metric-group">
                 <h3>Tracker</h3>
                 <div class="metric">
-                    <span class="label">Lane:</span>
-                    <span id="tracker-lane" class="value">IDLE</span>
+                    <span class="label">Status:</span>
+                    <span id="calibration-status" class="value">Waiting...</span>
+                </div>
+                <div class="metric">
+                    <span class="label">Ball:</span>
+                    <span id="ball-position" class="value">--</span>
                 </div>
                 <div class="metric">
                     <span class="label">Jitter:</span>
                     <span id="idle-jitter" class="value">--</span>
                     <span class="unit">px</span>
                 </div>
-                <div class="metric">
-                    <span class="label">Ball X:</span>
-                    <span id="ball-x" class="value">--</span>
-                    <span class="unit">px</span>
-                </div>
-                <div class="metric">
-                    <span class="label">Ball Y:</span>
-                    <span id="ball-y" class="value">--</span>
-                    <span class="unit">px</span>
-                </div>
-            </section>
-
-            <section class="metric-group">
-                <h3>Shot Distance</h3>
-                <div class="metric">
-                    <span class="label">Distance:</span>
-                    <span id="shot-distance" class="value">--</span>
-                    <span class="unit">cm</span>
-                </div>
-                <div class="metric">
-                    <span class="label">Start:</span>
-                    <span id="shot-start" class="value small">--</span>
-                </div>
-                <div class="metric">
-                    <span class="label">End:</span>
-                    <span id="shot-end" class="value small">--</span>
-                </div>
-            </section>
-
-            <section class="metric-group">
-                <h3>Ruler Measurement</h3>
-                <p class="helper-text">Click two points to measure distance</p>
-                <div class="metric">
-                    <span class="label">Measured:</span>
-                    <span id="ruler-distance" class="value">--</span>
-                    <span class="unit">cm</span>
-                </div>
-                <div class="metric">
-                    <span class="label">Pixels:</span>
-                    <span id="ruler-pixels" class="value">--</span>
-                    <span class="unit">px</span>
-                </div>
-                <button id="ruler-btn" class="btn btn-ruler">Start Ruler</button>
-                <button id="ruler-clear" class="btn btn-secondary" style="display:none;">Clear</button>
-                
-                <div id="ruler-correction" style="display:none; margin-top: 12px;">
-                    <p class="helper-text">Actual distance (from physical ruler):</p>
-                    <div style="display: flex; gap: 8px; align-items: center;">
-                        <input type="number" id="actual-distance" value="30" step="0.1" min="1" style="width: 80px; padding: 6px; background: var(--bg-primary); border: 1px solid var(--bg-tertiary); color: var(--text-primary); border-radius: 4px;">
-                        <span class="unit">cm</span>
-                        <button id="apply-correction" class="btn" style="padding: 6px 12px; margin: 0;">Fix Cal</button>
-                    </div>
-                </div>
-            </section>
-
-            <section class="metric-group">
-                <h3>Calibration</h3>
-                <div class="metric">
-                    <span class="label">Status:</span>
-                    <span id="calibration-status" class="value">Not calibrated</span>
-                </div>
-                <div class="metric">
-                    <span class="label">px/m:</span>
-                    <span id="pixels-per-meter" class="value">--</span>
-                </div>
-                <button id="calibrate-btn" class="btn">Calibrate</button>
                 <button id="reset-btn" class="btn btn-secondary">Reset Tracker</button>
             </section>
         </aside>
-
-        <!-- Calibration modal -->
-        <div id="calibration-modal" class="modal hidden">
-            <div class="modal-content">
-                <h2>Manual Calibration</h2>
-                <p>Click 4 corners of a known rectangle on the canvas (clockwise from top-left).</p>
-                <div class="calibration-inputs">
-                    <label>
-                        Width (meters):
-                        <input type="number" id="cal-width" value="0.5" step="0.01" min="0.1">
-                    </label>
-                    <label>
-                        Height (meters):
-                        <input type="number" id="cal-height" value="1.0" step="0.01" min="0.1">
-                    </label>
-                </div>
-                <div id="calibration-points">
-                    <span>Points: <span id="cal-point-count">0</span>/4</span>
-                </div>
-                <div class="modal-buttons">
-                    <button id="cal-cancel" class="btn btn-secondary">Cancel</button>
-                    <button id="cal-apply" class="btn" disabled>Apply</button>
-                </div>
-            </div>
-        </div>
     </div>
 
     <script src="/static/app.js"></script>

@@ -12,10 +12,6 @@
     --success: #4ade80;
     --warning: #fbbf24;
     --error: #ef4444;
-    --ball-color: #fff;
-    --trail-color: rgba(233, 69, 96, 0.6);
-    --velocity-color: #4ade80;
-    --prediction-color: rgba(251, 191, 36, 0.5);
 }
 
 * {
@@ -34,7 +30,7 @@ body {
 
 #app {
     display: grid;
-    grid-template-columns: 1fr 280px;
+    grid-template-columns: 1fr 260px;
     grid-template-rows: auto 1fr;
     height: 100vh;
 }
@@ -103,10 +99,6 @@ body {
     top: 0;
     left: 0;
     pointer-events: none;
-}
-
-#ball-canvas.interactive {
-    pointer-events: auto;
 }
 
 #view-toggle {
@@ -216,7 +208,7 @@ body {
 
 .metric .label {
     color: var(--text-secondary);
-    min-width: 100px;
+    min-width: 80px;
 }
 
 .metric .value {
@@ -225,6 +217,10 @@ body {
     color: var(--text-primary);
     min-width: 60px;
     text-align: right;
+}
+
+.metric .value.ready {
+    color: var(--success);
 }
 
 .metric .unit {
@@ -266,119 +262,6 @@ body {
 .btn-secondary:hover {
     background: var(--bg-primary);
     color: var(--text-primary);
-}
-
-.btn-ruler {
-    background: var(--warning);
-    color: #000;
-}
-
-.btn-ruler:hover {
-    background: #fcd34d;
-}
-
-.btn-ruler.active {
-    background: var(--success);
-    color: #000;
-}
-
-.helper-text {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    margin-bottom: 8px;
-}
-
-.metric .value.small {
-    font-size: 0.75rem;
-}
-
-.value.highlight {
-    color: var(--warning);
-    font-size: 1.1rem;
-}
-
-.value.auto {
-    color: var(--success);
-}
-
-/* Modal */
-.modal {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    left: auto;
-    bottom: auto;
-    background: transparent;
-    z-index: 1000;
-    pointer-events: none;
-}
-
-.modal.hidden {
-    display: none;
-}
-
-.modal-content {
-    background: var(--bg-secondary);
-    padding: 24px;
-    border-radius: 8px;
-    max-width: 350px;
-    width: 350px;
-    pointer-events: auto;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
-}
-
-.modal-content h2 {
-    margin-bottom: 12px;
-    font-size: 1.25rem;
-}
-
-.modal-content p {
-    color: var(--text-secondary);
-    margin-bottom: 16px;
-    font-size: 0.875rem;
-}
-
-.calibration-inputs {
-    display: flex;
-    gap: 12px;
-    margin-bottom: 16px;
-}
-
-.calibration-inputs label {
-    flex: 1;
-    font-size: 0.875rem;
-    color: var(--text-secondary);
-}
-
-.calibration-inputs input {
-    display: block;
-    width: 100%;
-    margin-top: 4px;
-    padding: 8px;
-    border: 1px solid var(--bg-tertiary);
-    border-radius: 4px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    font-size: 0.875rem;
-}
-
-#calibration-points {
-    margin-bottom: 16px;
-    padding: 12px;
-    background: var(--bg-primary);
-    border-radius: 4px;
-    text-align: center;
-    font-size: 0.875rem;
-}
-
-.modal-buttons {
-    display: flex;
-    gap: 8px;
-}
-
-.modal-buttons .btn {
-    flex: 1;
-    margin-top: 0;
 }
 
 /* Responsive */
