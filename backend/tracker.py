@@ -26,10 +26,11 @@ logger = logging.getLogger(__name__)
 
 class ShotState(Enum):
     """Shot detection state machine states."""
-    ARMED = "ARMED"          # Waiting for ball, ready to detect motion
-    TRACKING = "TRACKING"    # Ball in motion, recording trajectory
-    STOPPED = "STOPPED"      # Ball stopped, computing final metrics
-    COOLDOWN = "COOLDOWN"    # Brief pause before re-arming
+    ARMED = "ARMED"                    # Waiting for ball, ready to detect motion
+    TRACKING = "TRACKING"              # Ball in motion, recording trajectory
+    VIRTUAL_ROLLING = "VIRTUAL_ROLLING"  # Ball exited frame, simulating virtually
+    STOPPED = "STOPPED"                # Ball stopped, computing final metrics
+    COOLDOWN = "COOLDOWN"              # Brief pause before re-arming
 
 
 class BackgroundModel:
@@ -143,6 +144,33 @@ class TrackPoint:
     
 
 @dataclass
+class ExitState:
+    """Ball state when exiting the camera frame."""
+    position: Tuple[float, float]      # Exit position (x, y) in pixels
+    velocity: Tuple[float, float]      # Exit velocity (vx, vy) in px/s
+    speed: float                        # Exit speed in px/s
+    direction_deg: float                # Exit direction in degrees
+    curvature: float                    # Trajectory curvature (positive = curving right)
+    timestamp_ns: int                   # When ball exited
+    frame_id: int                       # Frame when ball exited
+    trajectory_before_exit: List[Tuple[float, float]]  # Trajectory up to exit
+
+
+@dataclass
+class VirtualBallState:
+    """State of the virtual ball after exiting frame."""
+    x: float                            # Current virtual x position
+    y: float                            # Current virtual y position
+    vx: float                           # Current velocity x
+    vy: float                           # Current velocity y
+    speed: float                        # Current speed
+    distance_traveled: float            # Total distance from exit point
+    time_since_exit: float              # Time since ball exited (seconds)
+    is_rolling: bool                    # Whether ball is still rolling
+    final_position: Optional[Tuple[float, float]] = None  # Where ball will stop
+
+
+@dataclass
 class ShotResult:
     """Final shot metrics after ball stops."""
     initial_speed_px_s: float
@@ -151,6 +179,9 @@ class ShotResult:
     frames_to_speed: int     # Frames from impact to first stable speed
     trajectory: List[Tuple[float, float]]
     duration_ms: float
+    virtual_distance_px: float = 0.0   # Distance traveled virtually (after frame exit)
+    total_distance_px: float = 0.0     # Total distance (physical + virtual)
+    exited_frame: bool = False         # Whether ball exited the camera view
     
 
 @dataclass
@@ -165,6 +196,8 @@ class TrackerState:
     velocity: Optional[Velocity] = None
     shot_result: Optional[ShotResult] = None
     idle_stddev: float = 0.0  # Position jitter when idle
+    virtual_ball: Optional[VirtualBallState] = None  # Virtual ball when rolling off-frame
+    exit_state: Optional[ExitState] = None  # State when ball exited frame
 
 
 class BallTracker:
@@ -220,6 +253,24 @@ class BallTracker:
     MAX_POSITION_JUMP_PX = 100      # Large jump = ball placement, not shot
     MIN_SHOT_FRAMES = 5             # Minimum frames for valid shot
     
+    # Frame exit detection - for virtual ball continuation
+    FRAME_EXIT_MARGIN_PX = 30       # Ball considered "exited" when this close to edge
+    MIN_EXIT_SPEED_PX_S = 100       # Minimum speed to trigger virtual rolling
+    MIN_TRACKING_FRAMES_FOR_EXIT = 10  # Need enough data for curve estimation
+    
+    # Virtual ball physics - LINEAR DECELERATION MODEL
+    # Real putting physics: constant friction force → constant deceleration
+    # v(t) = v0 - a*t, stops when v=0, distance = v0²/(2a)
+    # 
+    # Default deceleration: 0.55 m/s² (configurable via config.json)
+    # Stored in m/s² and converted to px/s² using current calibration
+    DECELERATION_M_S2 = 0.55        # Default deceleration in m/s²
+    MIN_VIRTUAL_SPEED_PX_S = 20     # Stop virtual rolling below this speed
+    MAX_VIRTUAL_TIME_S = 10.0       # Maximum virtual rolling time (safety limit)
+    
+    # Current calibration for pixel/meter conversion
+    _current_pixels_per_meter: float = 1150.0  # Updated by set_calibration()
+    
     def __init__(
         self, 
         detector: Optional[BallDetector] = None,
@@ -228,7 +279,8 @@ class BallTracker:
         stopped_velocity_threshold: Optional[float] = None,
         stopped_confirm_frames: Optional[int] = None,
         cooldown_duration_ms: Optional[int] = None,
-        idle_ema_alpha: Optional[float] = None
+        idle_ema_alpha: Optional[float] = None,
+        deceleration_px_s2: Optional[float] = None
     ):
         self._state = ShotState.ARMED
         self._lane = TrackerLane.IDLE
@@ -249,6 +301,10 @@ class BallTracker:
             self.COOLDOWN_DURATION_MS = cooldown_duration_ms
         if idle_ema_alpha is not None:
             self.IDLE_EMA_ALPHA = idle_ema_alpha
+        if deceleration_px_s2 is not None:
+            # If passed in px/s², convert to m/s² using default ppm
+            self.DECELERATION_M_S2 = deceleration_px_s2 / 1150.0
+            logger.info(f"Virtual ball deceleration set to {self.DECELERATION_M_S2:.3f} m/s²")
         
         # Position tracking
         self._current_pos: Optional[Tuple[float, float]] = None
@@ -291,6 +347,18 @@ class BallTracker:
         # ROI for motion lane tracking
         self._roi: Optional[Tuple[int, int, int, int]] = None  # x, y, w, h
         
+        # Frame bounds for exit detection (set externally based on camera resolution)
+        self._frame_width: int = 1280
+        self._frame_height: int = 800
+        
+        # Exit detection and virtual ball state
+        self._exit_state: Optional[ExitState] = None
+        self._virtual_ball: Optional[VirtualBallState] = None
+        self._virtual_start_time_ns: int = 0
+        self._frames_lost: int = 0  # Consecutive frames without detection during tracking
+        self._last_valid_position: Optional[Tuple[float, float]] = None
+        self._last_valid_velocity: Optional[Velocity] = None
+        
     def update(
         self, 
         detection: Optional[Detection], 
@@ -310,6 +378,12 @@ class BallTracker:
         Returns:
             Current tracker state
         """
+        # Update frame bounds from frame if available
+        if frame is not None:
+            h, w = frame.shape[:2]
+            if w != self._frame_width or h != self._frame_height:
+                self.set_frame_bounds(w, h)
+        
         # Update background model if frame provided and in IDLE
         if frame is not None:
             self._last_frame = frame
@@ -329,9 +403,20 @@ class BallTracker:
             if self._background.is_initialized:
                 _, self._foreground_delta = self._background.get_foreground_delta(frame)
         
+        # Handle VIRTUAL_ROLLING state - update virtual ball physics
+        if self._state == ShotState.VIRTUAL_ROLLING:
+            self._update_virtual_ball(timestamp_ns, frame_id)
+            return self._build_state()
+        
         # Handle state-specific logic
         if self._state == ShotState.COOLDOWN:
             self._handle_cooldown(timestamp_ns)
+        
+        # Check for frame exit during tracking (even without detection)
+        if self._state == ShotState.TRACKING:
+            if self._check_frame_exit(detection, timestamp_ns, frame_id):
+                self._transition_to_virtual_rolling(timestamp_ns, frame_id)
+                return self._build_state()
         
         if detection is None:
             return self._build_state()
@@ -458,6 +543,23 @@ class BallTracker:
         - ROI updated for efficient tracking
         """
         new_pos = (detection.cx, detection.cy)
+        
+        # Check for suspicious position jump during tracking (might be noise after ball exits)
+        if self._current_pos and self._velocity:
+            dx = new_pos[0] - self._current_pos[0]
+            dy = new_pos[1] - self._current_pos[1]
+            jump_dist = np.sqrt(dx**2 + dy**2)
+            
+            # Expected movement based on velocity and frame time (assume ~120fps)
+            expected_move = self._velocity.speed / 120
+            
+            # If jump is way larger than expected, this might be noise
+            if jump_dist > expected_move * 5 and jump_dist > 50:
+                logger.warning(f"Suspicious position jump during tracking: {jump_dist:.1f}px "
+                             f"(expected ~{expected_move:.1f}px). Treating as lost frame.")
+                self._frames_lost += 1
+                # Don't update position with this suspicious detection
+                return
         
         # For first N frames after impact, use raw position (critical for speed accuracy)
         frames_since_motion = frame_id - self._motion_start_frame
@@ -690,6 +792,16 @@ class BallTracker:
     
     def _check_tracking_to_stopped(self, frame_id: int):
         """Check if ball has stopped moving."""
+        # Don't transition to STOPPED if we recently lost detection but had high velocity
+        # This indicates ball might have exited frame, not stopped
+        if self._frames_lost > 0 and self._last_valid_velocity:
+            if self._last_valid_velocity.speed > self.MIN_EXIT_SPEED_PX_S:
+                # Ball was moving fast when we lost it - don't call it "stopped"
+                # Frame exit detection should handle this
+                logger.debug(f"Ignoring stop check: frames_lost={self._frames_lost}, "
+                           f"last_speed={self._last_valid_velocity.speed:.1f}")
+                return
+        
         if self._velocity is None or self._velocity.speed < self.STOPPED_VELOCITY_THRESHOLD:
             self._stopped_count += 1
             if self._stopped_count >= self.STOPPED_CONFIRM_FRAMES:
@@ -728,7 +840,7 @@ class BallTracker:
         frames_to_tracking = self.MOTION_CONFIRM_FRAMES
         frames_to_speed = self._first_speed_frame - self._motion_start_frame if self._first_speed_frame > 0 else 0
         
-        # Duration
+        # Duration (including virtual rolling time)
         if len(self._trajectory) >= 2:
             start_t = self._trajectory[0].timestamp_ns
             end_t = self._trajectory[-1].timestamp_ns
@@ -736,13 +848,31 @@ class BallTracker:
         else:
             duration_ms = 0.0
         
-        # Log trajectory info for debugging
+        # Add virtual rolling time if applicable
+        if self._virtual_ball:
+            duration_ms += self._virtual_ball.time_since_exit * 1000
+        
+        # Physical distance (trajectory in frame)
+        physical_distance_px = 0.0
         if trajectory_points:
             start_pos = trajectory_points[0]
             end_pos = trajectory_points[-1]
-            distance_px = np.sqrt((end_pos[0] - start_pos[0])**2 + (end_pos[1] - start_pos[1])**2)
-            logger.info(f"Trajectory: {len(trajectory_points)} points, "
-                       f"start={start_pos}, end={end_pos}, distance={distance_px:.1f}px")
+            physical_distance_px = np.sqrt((end_pos[0] - start_pos[0])**2 + (end_pos[1] - start_pos[1])**2)
+        
+        # Virtual distance (after frame exit)
+        virtual_distance_px = 0.0
+        exited_frame = False
+        if self._virtual_ball:
+            virtual_distance_px = self._virtual_ball.distance_traveled
+            exited_frame = True
+        
+        # Total distance
+        total_distance_px = physical_distance_px + virtual_distance_px
+        
+        # Log trajectory info for debugging
+        logger.info(f"Trajectory: {len(trajectory_points)} points, "
+                   f"physical={physical_distance_px:.1f}px, virtual={virtual_distance_px:.1f}px, "
+                   f"total={total_distance_px:.1f}px")
         
         self._shot_result = ShotResult(
             initial_speed_px_s=initial_speed,
@@ -750,11 +880,14 @@ class BallTracker:
             frames_to_tracking=frames_to_tracking,
             frames_to_speed=frames_to_speed,
             trajectory=trajectory_points,  # Full trajectory (no longer slicing)
-            duration_ms=duration_ms
+            duration_ms=duration_ms,
+            virtual_distance_px=virtual_distance_px,
+            total_distance_px=total_distance_px,
+            exited_frame=exited_frame
         )
         
         logger.info(f"Shot result: speed={initial_speed:.1f}px/s, dir={initial_direction:.1f}°, "
-                   f"frames_to_speed={frames_to_speed}, trajectory_points={len(trajectory_points)}")
+                   f"total_distance={total_distance_px:.1f}px, exited_frame={exited_frame}")
     
     def _transition_to_cooldown(self, timestamp_ns: int):
         """Transition from STOPPED to COOLDOWN."""
@@ -785,6 +918,13 @@ class BallTracker:
         self._settling_countdown = self.SETTLING_FRAMES // 2  # Brief settling after shot
         self._roi = None
         self._background.reset()  # Reset background for new baseline
+        
+        # Clear virtual ball state
+        self._virtual_ball = None
+        self._exit_state = None
+        self._frames_lost = 0
+        self._last_valid_position = None
+        self._last_valid_velocity = None
     
     def _compute_idle_stddev(self) -> float:
         """Compute position standard deviation when idle."""
@@ -796,16 +936,26 @@ class BallTracker:
     
     def _build_state(self) -> TrackerState:
         """Build current state for external consumption."""
+        # During virtual rolling, use virtual ball position
+        if self._state == ShotState.VIRTUAL_ROLLING and self._virtual_ball:
+            ball_x = self._virtual_ball.x
+            ball_y = self._virtual_ball.y
+        else:
+            ball_x = self._current_pos[0] if self._current_pos else None
+            ball_y = self._current_pos[1] if self._current_pos else None
+        
         return TrackerState(
             state=self._state,
             lane=self._lane,
-            ball_x=self._current_pos[0] if self._current_pos else None,
-            ball_y=self._current_pos[1] if self._current_pos else None,
+            ball_x=ball_x,
+            ball_y=ball_y,
             ball_radius=self._last_radius,
             ball_confidence=self._last_confidence,
             velocity=self._velocity,
             shot_result=self._shot_result,
-            idle_stddev=self._compute_idle_stddev()
+            idle_stddev=self._compute_idle_stddev(),
+            virtual_ball=self._virtual_ball,
+            exit_state=self._exit_state
         )
     
     def reset(self):
@@ -829,9 +979,379 @@ class BallTracker:
         self._motion_trigger_count = 0
         self._idle_stability_count = 0
         self._settling_countdown = self.SETTLING_FRAMES  # Start with settling period
+        
+        # Clear virtual ball state
+        self._virtual_ball = None
+        self._exit_state = None
+        self._frames_lost = 0
+        self._last_valid_position = None
+        self._last_valid_velocity = None
+        
         logger.info("Tracker reset")
+    
+    def set_calibration(self, pixels_per_meter: float):
+        """
+        Update the current calibration for pixel/meter conversions.
+        Called by main loop when auto-calibration updates.
+        """
+        self._current_pixels_per_meter = pixels_per_meter
+    
+    def get_deceleration_px_s2(self) -> float:
+        """
+        Get deceleration in px/s² using current calibration.
+        """
+        return self.DECELERATION_M_S2 * self._current_pixels_per_meter
+    
+    def set_deceleration_m_s2(self, deceleration: float):
+        """Set deceleration in m/s²."""
+        self.DECELERATION_M_S2 = deceleration
+        logger.info(f"Virtual ball deceleration set to {deceleration:.3f} m/s²")
     
     @property
     def trajectory(self) -> List[Tuple[float, float]]:
         """Get current trajectory as list of (x, y) tuples."""
         return [(p.x, p.y) for p in self._trajectory]
+    
+    def set_frame_bounds(self, width: int, height: int):
+        """Set frame dimensions for exit detection."""
+        self._frame_width = width
+        self._frame_height = height
+        logger.info(f"Frame bounds set to {width}x{height}")
+    
+    def _compute_trajectory_curvature(self) -> float:
+        """
+        Compute curvature from trajectory points.
+        
+        Uses the last N points to fit a curve and estimate the rate of direction change.
+        Positive = curving right, Negative = curving left.
+        
+        Returns curvature in degrees per pixel traveled.
+        """
+        if len(self._raw_trajectory) < 10:
+            return 0.0
+        
+        points = list(self._raw_trajectory)[-20:]  # Use last 20 points
+        if len(points) < 10:
+            return 0.0
+        
+        # Compute direction at start and end of the window
+        # Start direction (first few points)
+        p0, p1 = points[0], points[min(5, len(points)-1)]
+        dx1 = p1.x - p0.x
+        dy1 = p1.y - p0.y
+        dist1 = np.sqrt(dx1**2 + dy1**2)
+        if dist1 < 5:
+            return 0.0
+        angle1 = np.degrees(np.arctan2(dy1, dx1))
+        
+        # End direction (last few points)
+        p2, p3 = points[-min(6, len(points))], points[-1]
+        dx2 = p3.x - p2.x
+        dy2 = p3.y - p2.y
+        dist2 = np.sqrt(dx2**2 + dy2**2)
+        if dist2 < 5:
+            return 0.0
+        angle2 = np.degrees(np.arctan2(dy2, dx2))
+        
+        # Angle change
+        angle_diff = angle2 - angle1
+        # Normalize to -180 to 180
+        while angle_diff > 180:
+            angle_diff -= 360
+        while angle_diff < -180:
+            angle_diff += 360
+        
+        # Total distance traveled in this window
+        total_dist = 0.0
+        for i in range(1, len(points)):
+            dx = points[i].x - points[i-1].x
+            dy = points[i].y - points[i-1].y
+            total_dist += np.sqrt(dx**2 + dy**2)
+        
+        if total_dist < 10:
+            return 0.0
+        
+        # Curvature = angle change per unit distance
+        curvature = angle_diff / total_dist
+        
+        return curvature
+    
+    def _check_frame_exit(self, detection: Optional[Detection], timestamp_ns: int, frame_id: int) -> bool:
+        """
+        Check if ball has exited the frame during tracking.
+        
+        Handles exit from ANY edge based on ball velocity direction.
+        Returns True if ball has exited and virtual rolling should begin.
+        """
+        if self._state != ShotState.TRACKING:
+            return False
+        
+        # Track frames without detection
+        if detection is None:
+            self._frames_lost += 1
+            logger.debug(f"Frame {frame_id}: detection lost, frames_lost={self._frames_lost}, "
+                        f"last_pos={self._last_valid_position}, "
+                        f"last_vel={self._last_valid_velocity.speed if self._last_valid_velocity else None}")
+        else:
+            self._frames_lost = 0
+            self._last_valid_position = (detection.cx, detection.cy)
+            if self._velocity:
+                self._last_valid_velocity = self._velocity
+        
+        should_exit = False
+        exit_reason = ""
+        
+        # METHOD 1: Ball lost AND had significant velocity
+        # If we were tracking a fast-moving ball and suddenly lost it, it likely exited
+        if self._frames_lost >= 2 and self._last_valid_velocity:
+            speed = self._last_valid_velocity.speed
+            if speed > self.MIN_EXIT_SPEED_PX_S:
+                # Ball was moving fast and we lost it - assume it exited
+                should_exit = True
+                exit_reason = f"Lost fast-moving ball (speed={speed:.1f}px/s)"
+        
+        # METHOD 2: Ball is near edge AND heading toward that edge
+        if self._last_valid_position and self._last_valid_velocity:
+            x, y = self._last_valid_position
+            vx, vy = self._last_valid_velocity.vx, self._last_valid_velocity.vy
+            speed = self._last_valid_velocity.speed
+            
+            # Calculate time to edge based on velocity
+            margin = self.FRAME_EXIT_MARGIN_PX * 3  # Larger margin for prediction
+            
+            # Check if ball would reach any edge soon based on trajectory
+            if speed > self.MIN_EXIT_SPEED_PX_S:
+                # Right edge
+                if vx > 50 and x >= self._frame_width - margin:
+                    if self._frames_lost >= 1:
+                        should_exit = True
+                        exit_reason = f"Ball exited RIGHT edge (x={x:.1f}, vx={vx:.1f})"
+                
+                # Left edge  
+                if vx < -50 and x <= margin:
+                    if self._frames_lost >= 1:
+                        should_exit = True
+                        exit_reason = f"Ball exited LEFT edge (x={x:.1f}, vx={vx:.1f})"
+                
+                # Bottom edge
+                if vy > 50 and y >= self._frame_height - margin:
+                    if self._frames_lost >= 1:
+                        should_exit = True
+                        exit_reason = f"Ball exited BOTTOM edge (y={y:.1f}, vy={vy:.1f})"
+                
+                # Top edge
+                if vy < -50 and y <= margin:
+                    if self._frames_lost >= 1:
+                        should_exit = True
+                        exit_reason = f"Ball exited TOP edge (y={y:.1f}, vy={vy:.1f})"
+        
+        # METHOD 3: Ball is literally at edge with good velocity
+        if detection and self._velocity and self._velocity.speed > self.MIN_EXIT_SPEED_PX_S:
+            x, y = detection.cx, detection.cy
+            margin = self.FRAME_EXIT_MARGIN_PX
+            
+            at_edge = (x <= margin or x >= self._frame_width - margin or
+                      y <= margin or y >= self._frame_height - margin)
+            
+            if at_edge:
+                should_exit = True
+                exit_reason = f"Ball at edge with velocity: pos=({x:.1f}, {y:.1f}), speed={self._velocity.speed:.1f}"
+        
+        if should_exit:
+            logger.info(f"Frame exit detected: {exit_reason}")
+            
+            # Check minimum requirements for virtual rolling
+            if len(self._raw_trajectory) < self.MIN_TRACKING_FRAMES_FOR_EXIT:
+                logger.warning(f"Not enough tracking frames for virtual rolling: {len(self._raw_trajectory)} < {self.MIN_TRACKING_FRAMES_FOR_EXIT}")
+                return False
+            
+            vel = self._last_valid_velocity or self._velocity
+            if vel is None or vel.speed < self.MIN_EXIT_SPEED_PX_S:
+                logger.warning(f"Exit speed too low for virtual rolling: {vel.speed if vel else 0:.1f} px/s < {self.MIN_EXIT_SPEED_PX_S}")
+                return False
+            
+            logger.info(f"=== VIRTUAL ROLLING TRIGGERED ===")
+            logger.info(f"  Speed: {vel.speed:.1f} px/s")
+            logger.info(f"  Direction: {vel.direction_deg:.1f}°")
+            logger.info(f"  Trajectory points: {len(self._raw_trajectory)}")
+            return True
+        
+        return False
+    
+    def _transition_to_virtual_rolling(self, timestamp_ns: int, frame_id: int):
+        """Transition from TRACKING to VIRTUAL_ROLLING when ball exits frame."""
+        logger.info(f"TRACKING -> VIRTUAL_ROLLING at frame {frame_id}")
+        
+        # Capture exit state
+        exit_pos = self._last_valid_position or self._current_pos
+        exit_vel = self._last_valid_velocity or self._velocity
+        
+        if exit_pos is None or exit_vel is None:
+            logger.error("Cannot transition to virtual rolling: missing position/velocity")
+            self._transition_to_stopped(frame_id)
+            return
+        
+        curvature = self._compute_trajectory_curvature()
+        
+        self._exit_state = ExitState(
+            position=exit_pos,
+            velocity=(exit_vel.vx, exit_vel.vy),
+            speed=exit_vel.speed,
+            direction_deg=exit_vel.direction_deg,
+            curvature=curvature,
+            timestamp_ns=timestamp_ns,
+            frame_id=frame_id,
+            trajectory_before_exit=[(p.x, p.y) for p in self._trajectory]
+        )
+        
+        # Calculate expected final distance using LINEAR physics: distance = v0²/(2a)
+        a = self.get_deceleration_px_s2()
+        expected_max_distance = (exit_vel.speed ** 2) / (2 * a)
+        expected_stop_time = exit_vel.speed / a
+        
+        # Initialize virtual ball at exit position
+        self._virtual_ball = VirtualBallState(
+            x=exit_pos[0],
+            y=exit_pos[1],
+            vx=exit_vel.vx,
+            vy=exit_vel.vy,
+            speed=exit_vel.speed,
+            distance_traveled=0.0,
+            time_since_exit=0.0,
+            is_rolling=True,
+            final_position=None
+        )
+        
+        self._virtual_start_time_ns = timestamp_ns
+        self._state = ShotState.VIRTUAL_ROLLING
+        
+        logger.info(f"=== VIRTUAL ROLLING STARTED ===")
+        logger.info(f"  Exit position: {exit_pos}")
+        logger.info(f"  Exit speed: {exit_vel.speed:.1f} px/s")
+        logger.info(f"  Exit direction: {exit_vel.direction_deg:.1f}°")
+        logger.info(f"  Curvature: {curvature:.4f}°/px")
+        logger.info(f"  Deceleration: {a:.1f} px/s²")
+        logger.info(f"  Expected distance: {expected_max_distance:.1f} px")
+        logger.info(f"  Expected stop time: {expected_stop_time:.2f} s")
+    
+    def _update_virtual_ball(self, timestamp_ns: int, frame_id: int):
+        """
+        Update virtual ball position using physics simulation.
+        
+        Uses LINEAR deceleration (constant friction) for realistic putting feel.
+        v(t) = v0 - a*t
+        x(t) = v0*t - 0.5*a*t²
+        """
+        if self._virtual_ball is None or self._exit_state is None:
+            logger.warning("_update_virtual_ball called but no virtual ball state!")
+            return
+        
+        # Time since virtual rolling started
+        dt = (timestamp_ns - self._virtual_start_time_ns) / 1e9
+        
+        if dt > self.MAX_VIRTUAL_TIME_S:
+            logger.info(f"Virtual rolling timeout: dt={dt:.1f}s > max={self.MAX_VIRTUAL_TIME_S}s")
+            self._finish_virtual_rolling(frame_id)
+            return
+        
+        # LINEAR DECELERATION PHYSICS
+        # v(t) = v0 - a*t
+        # x(t) = v0*t - 0.5*a*t²
+        # Ball stops at t_stop = v0/a
+        
+        initial_speed = self._exit_state.speed
+        a = self.get_deceleration_px_s2()
+        
+        # Time when ball stops
+        t_stop = initial_speed / a
+        
+        # Check if ball has stopped
+        if dt >= t_stop:
+            # Ball has stopped - use final values
+            current_speed = 0.0
+            distance = (initial_speed ** 2) / (2 * a)  # Final distance
+            logger.info(f"Virtual ball stopped: t={dt:.2f}s >= t_stop={t_stop:.2f}s")
+            self._finish_virtual_rolling(frame_id)
+            return
+        
+        # Current speed (linear decrease)
+        current_speed = initial_speed - a * dt
+        
+        if current_speed < self.MIN_VIRTUAL_SPEED_PX_S:
+            logger.info(f"Virtual ball stopped: speed={current_speed:.1f} < threshold={self.MIN_VIRTUAL_SPEED_PX_S}")
+            self._finish_virtual_rolling(frame_id)
+            return
+        
+        # Distance traveled so far: x = v0*t - 0.5*a*t²
+        distance = initial_speed * dt - 0.5 * a * dt * dt
+        
+        # Apply curvature to direction
+        base_direction = np.radians(self._exit_state.direction_deg)
+        curvature_rad = np.radians(self._exit_state.curvature)
+        
+        # Current direction = base direction + curvature * distance_traveled
+        current_direction = base_direction + curvature_rad * distance
+        
+        # Position
+        exit_x, exit_y = self._exit_state.position
+        
+        # For curved path, use average direction for position calculation
+        if abs(self._exit_state.curvature) > 0.001:
+            avg_direction = base_direction + curvature_rad * distance / 2
+            x = exit_x + distance * np.cos(avg_direction)
+            y = exit_y + distance * np.sin(avg_direction)
+        else:
+            x = exit_x + distance * np.cos(base_direction)
+            y = exit_y + distance * np.sin(base_direction)
+        
+        # Update virtual ball state
+        self._virtual_ball.x = x
+        self._virtual_ball.y = y
+        self._virtual_ball.vx = current_speed * np.cos(current_direction)
+        self._virtual_ball.vy = current_speed * np.sin(current_direction)
+        self._virtual_ball.speed = current_speed
+        self._virtual_ball.distance_traveled = distance
+        self._virtual_ball.time_since_exit = dt
+        
+        # Calculate final position (where ball will stop)
+        max_distance = (initial_speed ** 2) / (2 * a)
+        if abs(self._exit_state.curvature) > 0.001:
+            final_avg_dir = base_direction + curvature_rad * max_distance / 2
+            final_x = exit_x + max_distance * np.cos(final_avg_dir)
+            final_y = exit_y + max_distance * np.sin(final_avg_dir)
+        else:
+            final_x = exit_x + max_distance * np.cos(base_direction)
+            final_y = exit_y + max_distance * np.sin(base_direction)
+        
+        self._virtual_ball.final_position = (final_x, final_y)
+        
+        # Log progress every ~0.5 seconds
+        if int(dt * 2) != int((dt - 0.05) * 2):
+            logger.info(f"Virtual rolling: t={dt:.2f}s/{t_stop:.2f}s, dist={distance:.1f}px, "
+                       f"speed={current_speed:.1f}px/s, pos=({x:.1f}, {y:.1f})")
+    
+    def _finish_virtual_rolling(self, frame_id: int):
+        """Finish virtual rolling and transition to STOPPED."""
+        if self._virtual_ball:
+            self._virtual_ball.is_rolling = False
+            
+            # Calculate total distance including physical tracking
+            physical_distance = 0.0
+            if self._exit_state and self._exit_state.trajectory_before_exit:
+                traj = self._exit_state.trajectory_before_exit
+                if len(traj) >= 2:
+                    start = traj[0]
+                    end = traj[-1]
+                    physical_distance = np.sqrt((end[0] - start[0])**2 + (end[1] - start[1])**2)
+            
+            virtual_distance = self._virtual_ball.distance_traveled
+            total_distance = physical_distance + virtual_distance
+            
+            logger.info(f"=== VIRTUAL ROLLING FINISHED ===")
+            logger.info(f"  Physical distance: {physical_distance:.1f} px")
+            logger.info(f"  Virtual distance: {virtual_distance:.1f} px")
+            logger.info(f"  TOTAL distance: {total_distance:.1f} px")
+            logger.info(f"  Roll time: {self._virtual_ball.time_since_exit:.2f}s")
+            logger.info(f"  Final position: ({self._virtual_ball.x:.1f}, {self._virtual_ball.y:.1f})")
+        
+        self._transition_to_stopped(frame_id)

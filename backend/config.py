@@ -60,6 +60,15 @@ class CalibrationData:
     origin_px: tuple = (0, 0)
     forward_direction_deg: float = 0.0  # Angle of +X axis in image coordinates
     created_at: Optional[str] = None
+    # Distance scale factor for real-world calibration fine-tuning
+    # If measured distances are consistently off, adjust this value
+    # Example: if real distance is 1.74m but we measure 1.63m, set to 1.74/1.63 = 1.067
+    distance_scale_factor: float = 1.0
+    # Virtual ball deceleration in m/s² - tune this for your putting surface
+    # Higher friction (rough carpet): 1.0-1.2 m/s²
+    # Medium friction (putting mat): 0.6-0.8 m/s²
+    # Low friction (fast green): 0.4-0.5 m/s²
+    virtual_deceleration_m_s2: float = 0.65
     
     def is_valid(self) -> bool:
         """Check if calibration data is valid and complete."""

@@ -22,6 +22,8 @@ class PuttingSimApp {
         this.maxTrailLength = 50;
         this.lastShot = null;
         this.prediction = null;
+        this.virtualBall = null;  // Virtual ball state for off-frame rolling
+        this.exitState = null;    // State when ball exited frame
         
         // Smoothing/interpolation for real-time tracking
         this.smoothedBall = { x: null, y: null, radius: 12 };
@@ -215,6 +217,33 @@ class PuttingSimApp {
             this.prediction = null;
         }
         
+        // Store virtual ball state
+        if (data.virtual_ball) {
+            this.virtualBall = data.virtual_ball;
+            // Update target position to virtual ball position for smooth rendering
+            this.targetBall.x = data.virtual_ball.x;
+            this.targetBall.y = data.virtual_ball.y;
+            
+            // Add virtual position to trail
+            this.trail.push({
+                x: data.virtual_ball.x,
+                y: data.virtual_ball.y,
+                state: 'VIRTUAL_ROLLING'
+            });
+            if (this.trail.length > this.maxTrailLength * 2) {  // Allow longer trail for virtual
+                this.trail.shift();
+            }
+        } else if (data.state === 'ARMED') {
+            this.virtualBall = null;
+        }
+        
+        // Store exit state
+        if (data.exit_state) {
+            this.exitState = data.exit_state;
+        } else if (data.state === 'ARMED') {
+            this.exitState = null;
+        }
+        
         // Update UI
         this.updateUI(data);
         
@@ -226,20 +255,75 @@ class PuttingSimApp {
         const stateClasses = {
             'ARMED': 'state-armed',
             'TRACKING': 'state-tracking',
+            'VIRTUAL_ROLLING': 'state-virtual',
             'STOPPED': 'state-stopped',
             'COOLDOWN': 'state-cooldown'
         };
-        this.elements.stateBadge.textContent = data.state;
+        
+        // Show friendly name for virtual rolling
+        const stateNames = {
+            'ARMED': 'ARMED',
+            'TRACKING': 'TRACKING',
+            'VIRTUAL_ROLLING': 'ROLLING...',
+            'STOPPED': 'STOPPED',
+            'COOLDOWN': 'COOLDOWN'
+        };
+        
+        this.elements.stateBadge.textContent = stateNames[data.state] || data.state;
         this.elements.stateBadge.className = stateClasses[data.state] || 'state-armed';
         
-        // Shot data
+        // Shot data - show total distance (physical + virtual)
         if (data.shot) {
             this.elements.speedValue.textContent = data.shot.speed_m_s.toFixed(2);
             this.elements.directionValue.textContent = data.shot.direction_deg.toFixed(1);
             
+            // Show total distance (including virtual)
             if (data.shot.distance_cm !== undefined) {
-                this.elements.shotDistance.textContent = data.shot.distance_cm.toFixed(1);
+                const distCm = data.shot.distance_cm;
+                const distM = data.shot.distance_m;
+                
+                // Show in meters if >= 1m, otherwise cm
+                if (distM >= 1) {
+                    this.elements.shotDistance.textContent = distM.toFixed(2) + 'm';
+                } else {
+                    this.elements.shotDistance.textContent = distCm.toFixed(1);
+                }
             }
+        }
+        
+        // Live distance during virtual rolling
+        if (data.state === 'VIRTUAL_ROLLING' && data.virtual_ball) {
+            const vb = data.virtual_ball;
+            // Get physical distance from exit state
+            let physicalDistCm = 0;
+            let virtualDistCm = vb.distance_cm || 0;
+            
+            // Add physical distance if we have exit state with trajectory
+            if (data.exit_state && data.exit_state.trajectory_before_exit) {
+                const traj = data.exit_state.trajectory_before_exit;
+                if (traj.length >= 2) {
+                    const start = traj[0];
+                    const end = traj[traj.length - 1];
+                    const physicalPx = Math.sqrt((end[0] - start[0])**2 + (end[1] - start[1])**2);
+                    physicalDistCm = (physicalPx / data.pixels_per_meter) * 100;
+                }
+            }
+            
+            const totalDistCm = physicalDistCm + virtualDistCm;
+            const totalDistM = totalDistCm / 100;
+            
+            // Update distance display with live total - format nicely
+            if (totalDistM >= 1) {
+                this.elements.shotDistance.textContent = totalDistM.toFixed(2) + 'm';
+            } else {
+                this.elements.shotDistance.textContent = totalDistCm.toFixed(0) + '';
+            }
+            
+            // Update speed display with virtual ball speed
+            this.elements.speedValue.textContent = (vb.speed_m_s || 0).toFixed(2);
+            
+            // Log to console for debugging
+            console.log(`Virtual rolling: physical=${physicalDistCm.toFixed(0)}cm + virtual=${virtualDistCm.toFixed(0)}cm = ${totalDistCm.toFixed(0)}cm total`);
         }
         
         // Performance metrics
@@ -250,8 +334,10 @@ class PuttingSimApp {
             this.elements.idleJitter.textContent = data.metrics.idle_stddev.toFixed(2);
         }
         
-        // Ball position
-        if (data.ball && data.ball.x_px !== null) {
+        // Ball position - show virtual position during virtual rolling
+        if (data.state === 'VIRTUAL_ROLLING' && data.virtual_ball) {
+            this.elements.ballPosition.textContent = `(${data.virtual_ball.x.toFixed(0)}, ${data.virtual_ball.y.toFixed(0)}) [V]`;
+        } else if (data.ball && data.ball.x_px !== null) {
             this.elements.ballPosition.textContent = `(${data.ball.x_px.toFixed(0)}, ${data.ball.y_px.toFixed(0)})`;
         }
         
@@ -303,13 +389,27 @@ class PuttingSimApp {
         // Draw trail
         this.drawTrail();
         
-        // Draw ball
+        // Draw exit point marker if ball has exited
+        if (this.exitState) {
+            this.drawExitMarker(this.exitState);
+        }
+        
+        // Draw ball - use different style for virtual rolling
+        const isVirtualRolling = this.state && this.state.state === 'VIRTUAL_ROLLING';
         if (this.smoothedBall.x !== null) {
-            this.drawBall({
-                x_px: this.smoothedBall.x,
-                y_px: this.smoothedBall.y,
-                radius_px: this.smoothedBall.radius
-            });
+            if (isVirtualRolling) {
+                this.drawVirtualBall({
+                    x_px: this.smoothedBall.x,
+                    y_px: this.smoothedBall.y,
+                    radius_px: this.smoothedBall.radius
+                });
+            } else {
+                this.drawBall({
+                    x_px: this.smoothedBall.x,
+                    y_px: this.smoothedBall.y,
+                    radius_px: this.smoothedBall.radius
+                });
+            }
         }
         
         // Draw velocity vector
@@ -320,9 +420,19 @@ class PuttingSimApp {
             );
         }
         
-        // Draw prediction
-        if (this.prediction && this.prediction.trajectory) {
+        // Draw virtual ball velocity and info
+        if (isVirtualRolling && this.virtualBall) {
+            this.drawVirtualBallInfo(this.virtualBall);
+        }
+        
+        // Draw prediction (when not in virtual rolling - virtual rolling handles its own display)
+        if (this.prediction && this.prediction.trajectory && !isVirtualRolling) {
             this.drawPrediction(this.prediction);
+        }
+        
+        // Draw final position marker during virtual rolling
+        if (isVirtualRolling && this.virtualBall && this.virtualBall.final_position) {
+            this.drawFinalPosition(this.virtualBall.final_position);
         }
         
         requestAnimationFrame(() => this.render());
@@ -334,14 +444,24 @@ class PuttingSimApp {
         let predictedX = this.targetBall.x;
         let predictedY = this.targetBall.y;
         
-        if (this.useVelocityPrediction && this.state && this.state.state === 'TRACKING') {
+        const isTracking = this.state && this.state.state === 'TRACKING';
+        const isVirtualRolling = this.state && this.state.state === 'VIRTUAL_ROLLING';
+        
+        if (this.useVelocityPrediction && (isTracking || isVirtualRolling)) {
             const clampedDt = Math.min(dt, 0.1);
-            predictedX = this.targetBall.x + this.ballVelocity.vx * clampedDt;
-            predictedY = this.targetBall.y + this.ballVelocity.vy * clampedDt;
+            
+            // Use virtual ball velocity during virtual rolling
+            if (isVirtualRolling && this.virtualBall) {
+                predictedX = this.targetBall.x + this.virtualBall.vx * clampedDt;
+                predictedY = this.targetBall.y + this.virtualBall.vy * clampedDt;
+            } else {
+                predictedX = this.targetBall.x + this.ballVelocity.vx * clampedDt;
+                predictedY = this.targetBall.y + this.ballVelocity.vy * clampedDt;
+            }
         }
         
-        const isTracking = this.state && this.state.state === 'TRACKING';
-        const factor = isTracking ? 0.5 : this.smoothingFactor;
+        // Faster smoothing during tracking/virtual rolling for responsiveness
+        const factor = (isTracking || isVirtualRolling) ? 0.5 : this.smoothingFactor;
         
         this.smoothedBall.x += (predictedX - this.smoothedBall.x) * factor;
         this.smoothedBall.y += (predictedY - this.smoothedBall.y) * factor;
@@ -387,6 +507,9 @@ class PuttingSimApp {
             
             if (p1.state === 'TRACKING') {
                 this.ctx.strokeStyle = `rgba(233, 69, 96, ${alpha})`;
+            } else if (p1.state === 'VIRTUAL_ROLLING') {
+                // Cyan/blue trail for virtual rolling
+                this.ctx.strokeStyle = `rgba(100, 200, 255, ${alpha})`;
             } else {
                 this.ctx.strokeStyle = `rgba(150, 150, 150, ${alpha * 0.5})`;
             }
@@ -397,9 +520,11 @@ class PuttingSimApp {
             this.ctx.lineTo(p1.x, p1.y);
             this.ctx.stroke();
             
+            // Draw dots - smaller for virtual rolling
             this.ctx.fillStyle = this.ctx.strokeStyle;
             this.ctx.beginPath();
-            this.ctx.arc(p1.x, p1.y, 2, 0, Math.PI * 2);
+            const dotSize = p1.state === 'VIRTUAL_ROLLING' ? 1.5 : 2;
+            this.ctx.arc(p1.x, p1.y, dotSize, 0, Math.PI * 2);
             this.ctx.fill();
         }
     }
@@ -504,6 +629,169 @@ class PuttingSimApp {
                 this.ctx.stroke();
             }
         }
+    }
+    
+    drawVirtualBall(ball) {
+        const x = ball.x_px;
+        const y = ball.y_px;
+        const radius = ball.radius_px || 12;
+        
+        // Pulsing glow effect for virtual ball
+        const time = performance.now() / 500;
+        const pulseIntensity = 0.3 + 0.2 * Math.sin(time);
+        
+        // Larger, more dramatic glow
+        const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, radius * 3);
+        gradient.addColorStop(0, `rgba(100, 200, 255, ${pulseIntensity})`);
+        gradient.addColorStop(0.5, `rgba(100, 200, 255, ${pulseIntensity * 0.5})`);
+        gradient.addColorStop(1, 'rgba(100, 200, 255, 0)');
+        this.ctx.fillStyle = gradient;
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, radius * 3, 0, Math.PI * 2);
+        this.ctx.fill();
+        
+        // Virtual ball - semi-transparent with cyan tint
+        this.ctx.fillStyle = 'rgba(200, 230, 255, 0.8)';
+        this.ctx.strokeStyle = 'rgba(100, 200, 255, 0.9)';
+        this.ctx.lineWidth = 2;
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, radius, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.stroke();
+        
+        // Inner highlight
+        this.ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+        this.ctx.beginPath();
+        this.ctx.arc(x - radius * 0.3, y - radius * 0.3, radius * 0.3, 0, Math.PI * 2);
+        this.ctx.fill();
+    }
+    
+    drawExitMarker(exitState) {
+        if (!exitState || !exitState.position) return;
+        
+        const [x, y] = exitState.position;
+        
+        // Draw a subtle marker where ball exited frame
+        this.ctx.strokeStyle = 'rgba(100, 200, 255, 0.5)';
+        this.ctx.lineWidth = 2;
+        this.ctx.setLineDash([5, 5]);
+        
+        // Small cross
+        const size = 10;
+        this.ctx.beginPath();
+        this.ctx.moveTo(x - size, y);
+        this.ctx.lineTo(x + size, y);
+        this.ctx.moveTo(x, y - size);
+        this.ctx.lineTo(x, y + size);
+        this.ctx.stroke();
+        
+        // Circle around exit point
+        this.ctx.beginPath();
+        this.ctx.arc(x, y, size * 1.5, 0, Math.PI * 2);
+        this.ctx.stroke();
+        
+        this.ctx.setLineDash([]);
+    }
+    
+    drawFinalPosition(finalPosition) {
+        if (!finalPosition) return;
+        
+        const [fx, fy] = finalPosition;
+        
+        // Only draw if reasonably within extended view
+        if (fx < -200 || fx > this.width + 2000 || fy < -200 || fy > this.height + 200) return;
+        
+        // Pulsing target marker
+        const time = performance.now() / 300;
+        const pulse = 0.6 + 0.4 * Math.sin(time);
+        
+        this.ctx.strokeStyle = `rgba(76, 217, 100, ${pulse})`;
+        this.ctx.lineWidth = 3;
+        
+        // Target circle
+        this.ctx.beginPath();
+        this.ctx.arc(fx, fy, 15, 0, Math.PI * 2);
+        this.ctx.stroke();
+        
+        // Crosshair
+        const size = 25;
+        this.ctx.beginPath();
+        this.ctx.moveTo(fx - size, fy);
+        this.ctx.lineTo(fx + size, fy);
+        this.ctx.moveTo(fx, fy - size);
+        this.ctx.lineTo(fx, fy + size);
+        this.ctx.stroke();
+        
+        // Inner dot
+        this.ctx.fillStyle = `rgba(76, 217, 100, ${pulse})`;
+        this.ctx.beginPath();
+        this.ctx.arc(fx, fy, 4, 0, Math.PI * 2);
+        this.ctx.fill();
+        
+        // Draw "STOP" label
+        this.ctx.fillStyle = `rgba(76, 217, 100, ${pulse})`;
+        this.ctx.font = 'bold 12px monospace';
+        this.ctx.textAlign = 'center';
+        this.ctx.fillText('STOP', fx, fy - 25);
+    }
+    
+    drawVirtualBallInfo(virtualBall) {
+        if (!virtualBall) return;
+        
+        // Draw velocity vector from virtual ball
+        if (virtualBall.speed_px_s > 20) {
+            const x = virtualBall.x;
+            const y = virtualBall.y;
+            const scale = 0.05;
+            const vx = virtualBall.vx * scale;
+            const vy = virtualBall.vy * scale;
+            
+            this.ctx.strokeStyle = 'rgba(100, 200, 255, 0.8)';
+            this.ctx.lineWidth = 2;
+            this.ctx.beginPath();
+            this.ctx.moveTo(x, y);
+            this.ctx.lineTo(x + vx, y + vy);
+            this.ctx.stroke();
+            
+            // Arrowhead
+            const angle = Math.atan2(vy, vx);
+            const headLength = 8;
+            this.ctx.fillStyle = 'rgba(100, 200, 255, 0.8)';
+            this.ctx.beginPath();
+            this.ctx.moveTo(x + vx, y + vy);
+            this.ctx.lineTo(
+                x + vx - headLength * Math.cos(angle - Math.PI / 6),
+                y + vy - headLength * Math.sin(angle - Math.PI / 6)
+            );
+            this.ctx.lineTo(
+                x + vx - headLength * Math.cos(angle + Math.PI / 6),
+                y + vy - headLength * Math.sin(angle + Math.PI / 6)
+            );
+            this.ctx.closePath();
+            this.ctx.fill();
+        }
+        
+        // Draw distance info near the ball
+        const x = Math.min(virtualBall.x, this.width - 100);
+        const y = Math.max(virtualBall.y - 40, 30);
+        
+        this.ctx.fillStyle = 'rgba(100, 200, 255, 0.9)';
+        this.ctx.font = 'bold 14px monospace';
+        this.ctx.textAlign = 'left';
+        
+        // Distance traveled
+        const distCm = virtualBall.distance_cm || 0;
+        const distM = virtualBall.distance_m || 0;
+        
+        if (distM >= 1) {
+            this.ctx.fillText(`${distM.toFixed(2)}m`, x + 20, y);
+        } else {
+            this.ctx.fillText(`${distCm.toFixed(0)}cm`, x + 20, y);
+        }
+        
+        // Speed
+        const speedMs = virtualBall.speed_m_s || 0;
+        this.ctx.fillText(`${speedMs.toFixed(2)} m/s`, x + 20, y + 16);
     }
 }
 

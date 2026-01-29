@@ -22,7 +22,7 @@ import uvicorn
 
 from .camera import Camera, CameraMode, FrameData
 from .detector import BallDetector, Detection
-from .tracker import BallTracker, TrackerState, ShotState
+from .tracker import BallTracker, TrackerState, ShotState, VirtualBallState
 from .calibration import Calibrator, AutoCalibrator
 from .predictor import BallPredictor
 from .config import get_config_manager, get_config
@@ -112,6 +112,10 @@ class PuttingSimApp:
             idle_ema_alpha=config.tracker.idle_ema_alpha
         )
         
+        # Set deceleration from config (in m/s², will be converted to px/s² using current calibration)
+        decel_m_s2 = getattr(config.calibration, 'virtual_deceleration_m_s2', 0.55)
+        self.tracker.set_deceleration_m_s2(decel_m_s2)
+        
         self.calibrator = Calibrator()
         self.auto_calibrator = AutoCalibrator(stabilization_frames=30)
         self.predictor = BallPredictor(
@@ -126,6 +130,10 @@ class PuttingSimApp:
         self._current_state: Optional[TrackerState] = None
         self._current_frame: Optional[np.ndarray] = None
         self._frame_id = 0
+        
+        # Locked calibration for completed shots (prevents distance changing after STOPPED)
+        self._shot_locked_ppm: Optional[float] = None
+        self._last_shot_state: Optional[ShotState] = None
         
         # FPS tracking
         self._cap_fps = FPSTracker()
@@ -225,24 +233,51 @@ class PuttingSimApp:
         # Auto-calibrate from ball size when idle (ball is stationary)
         if detection and self._current_state and self._current_state.state == ShotState.ARMED:
             self.auto_calibrator.update(detection.radius, detection.confidence)
+            # Update tracker with current calibration for accurate virtual physics
+            if self.auto_calibrator.is_calibrated:
+                self.tracker.set_calibration(self.auto_calibrator.pixels_per_meter)
     
     def get_pixels_per_meter(self) -> float:
         """
         Get the best available pixels_per_meter value.
         Prefers auto-calibration, falls back to manual calibration.
+        Applies distance_scale_factor from config for fine-tuning.
         """
         if self.auto_calibrator.is_calibrated:
-            return self.auto_calibrator.pixels_per_meter
+            base_ppm = self.auto_calibrator.pixels_per_meter
         elif self.calibrator.is_calibrated:
-            return self.calibrator.pixels_per_meter
+            base_ppm = self.calibrator.pixels_per_meter
         else:
             # Fallback default (approximate for 80cm height, 70° FOV)
-            return 1150.0
+            base_ppm = 1150.0
+        
+        # Apply distance scale factor from config (for real-world calibration adjustment)
+        # If scale_factor > 1.0, distances will be larger (compensates for underestimate)
+        # Dividing ppm by scale_factor has same effect as multiplying distance by scale_factor
+        config = get_config()
+        scale_factor = getattr(config.calibration, 'distance_scale_factor', 1.0)
+        if scale_factor and scale_factor != 1.0:
+            return base_ppm / scale_factor
+        return base_ppm
     
     def get_state_message(self) -> dict:
         """Build state message for WebSocket."""
         state = self._current_state
-        pixels_per_meter = self.get_pixels_per_meter()
+        
+        # Lock calibration when shot finishes to prevent distance drift
+        # This ensures distance doesn't change after ball stops
+        current_shot_state = state.state if state else None
+        
+        if current_shot_state == ShotState.ARMED:
+            # Reset lock when returning to ARMED (ready for new shot)
+            self._shot_locked_ppm = None
+        elif current_shot_state in (ShotState.STOPPED, ShotState.COOLDOWN):
+            # Lock the calibration when shot finishes
+            if self._shot_locked_ppm is None:
+                self._shot_locked_ppm = self.get_pixels_per_meter()
+        
+        # Use locked value if available, otherwise get fresh value
+        pixels_per_meter = self._shot_locked_ppm if self._shot_locked_ppm else self.get_pixels_per_meter()
         
         # Ball data
         ball_data = None
@@ -256,7 +291,7 @@ class PuttingSimApp:
             }
             # Check if ball is visible in frame
             resolution = self.camera.resolution if self.camera else (1280, 800)
-            ball_visible = (
+            ball_visible = bool(
                 0 <= state.ball_x <= resolution[0] and
                 0 <= state.ball_y <= resolution[1]
             )
@@ -270,10 +305,45 @@ class PuttingSimApp:
                 "speed_px_s": state.velocity.speed
             }
         
+        # Virtual ball data (when ball is rolling virtually after exiting frame)
+        virtual_ball_data = None
+        if state and state.virtual_ball:
+            vb = state.virtual_ball
+            # Convert virtual distance to meters
+            virtual_distance_m = vb.distance_traveled / pixels_per_meter
+            
+            virtual_ball_data = {
+                "x": round(vb.x, 1),
+                "y": round(vb.y, 1),
+                "vx": round(vb.vx, 1),
+                "vy": round(vb.vy, 1),
+                "speed_px_s": round(vb.speed, 1),
+                "speed_m_s": round(vb.speed / pixels_per_meter, 3),
+                "distance_px": round(vb.distance_traveled, 1),
+                "distance_m": round(virtual_distance_m, 3),
+                "distance_cm": round(virtual_distance_m * 100, 1),
+                "time_since_exit_s": round(vb.time_since_exit, 2),
+                "is_rolling": bool(vb.is_rolling),
+                "final_position": vb.final_position
+            }
+        
+        # Exit state data (when ball has exited frame)
+        exit_data = None
+        if state and state.exit_state:
+            es = state.exit_state
+            exit_data = {
+                "position": es.position,
+                "velocity": es.velocity,
+                "speed_px_s": round(es.speed, 1),
+                "direction_deg": round(es.direction_deg, 2),
+                "curvature": round(es.curvature, 4),
+                "trajectory_before_exit": es.trajectory_before_exit[-50:]  # Last 50 points
+            }
+        
         # Prediction data (when ball exits frame or after shot)
         prediction_data = None
-        if state and state.velocity and not ball_visible:
-            # Ball has exited - generate prediction
+        if state and state.velocity and not ball_visible and state.state != ShotState.VIRTUAL_ROLLING:
+            # Ball has exited - generate prediction (only if not already in virtual rolling)
             if state.ball_x is not None and state.velocity.speed > 50:
                 prediction = self.predictor.predict(
                     exit_position=(state.ball_x, state.ball_y),
@@ -296,28 +366,47 @@ class PuttingSimApp:
             speed_m_s = result.initial_speed_px_s / pixels_per_meter
             direction_deg = result.initial_direction_deg  # Use raw direction for now
             
-            # Calculate distance from trajectory
-            distance_px = 0.0
-            distance_m = 0.0
+            # Physical distance from trajectory (in-frame)
+            physical_distance_px = 0.0
+            physical_distance_m = 0.0
             if len(result.trajectory) >= 2:
                 start = result.trajectory[0]
                 end = result.trajectory[-1]
                 dx = end[0] - start[0]
                 dy = end[1] - start[1]
-                distance_px = np.sqrt(dx**2 + dy**2)
-                distance_m = distance_px / pixels_per_meter
+                physical_distance_px = np.sqrt(dx**2 + dy**2)
+                physical_distance_m = physical_distance_px / pixels_per_meter
+            
+            # Virtual distance (off-frame rolling)
+            virtual_distance_px = result.virtual_distance_px
+            virtual_distance_m = virtual_distance_px / pixels_per_meter
+            
+            # Total distance
+            total_distance_px = result.total_distance_px if result.total_distance_px > 0 else physical_distance_px
+            total_distance_m = total_distance_px / pixels_per_meter
             
             shot_data = {
                 "speed_m_s": round(speed_m_s, 3),
                 "speed_px_s": round(result.initial_speed_px_s, 1),
                 "direction_deg": round(direction_deg, 2),
-                "distance_m": round(distance_m, 4),
-                "distance_cm": round(distance_m * 100, 1),
-                "distance_px": round(distance_px, 1),
+                # Physical distance (visible in camera)
+                "physical_distance_m": round(physical_distance_m, 4),
+                "physical_distance_cm": round(physical_distance_m * 100, 1),
+                "physical_distance_px": round(physical_distance_px, 1),
+                # Virtual distance (simulated off-frame)
+                "virtual_distance_m": round(virtual_distance_m, 4),
+                "virtual_distance_cm": round(virtual_distance_m * 100, 1),
+                "virtual_distance_px": round(virtual_distance_px, 1),
+                # Total distance (physical + virtual)
+                "distance_m": round(total_distance_m, 4),
+                "distance_cm": round(total_distance_m * 100, 1),
+                "distance_px": round(total_distance_px, 1),
+                # Legacy fields for compatibility
                 "frames_to_tracking": result.frames_to_tracking,
                 "frames_to_speed": result.frames_to_speed,
                 "duration_ms": round(result.duration_ms, 1),
-                "trajectory": result.trajectory[-50:]  # Last 50 points
+                "trajectory": result.trajectory[-50:],  # Last 50 points
+                "exited_frame": bool(result.exited_frame)
             }
         
         # Metrics
@@ -338,6 +427,8 @@ class PuttingSimApp:
             "ball_visible": ball_visible,
             "velocity": velocity_data,
             "prediction": prediction_data,
+            "virtual_ball": virtual_ball_data,
+            "exit_state": exit_data,
             "shot": shot_data,
             "metrics": metrics,
             "calibrated": self.calibrator.is_calibrated or self.auto_calibrator.is_calibrated,

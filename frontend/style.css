@@ -167,9 +167,27 @@ body {
     border: 1px solid var(--text-muted);
 }
 
+.state-virtual {
+    background: rgba(100, 200, 255, 0.2);
+    color: #64c8ff;
+    border: 1px solid #64c8ff;
+    animation: virtual-pulse 0.8s infinite;
+}
+
 @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.7; }
+}
+
+@keyframes virtual-pulse {
+    0%, 100% { 
+        opacity: 1; 
+        box-shadow: 0 0 10px rgba(100, 200, 255, 0.5);
+    }
+    50% { 
+        opacity: 0.8; 
+        box-shadow: 0 0 20px rgba(100, 200, 255, 0.8);
+    }
 }
 
 /* Metrics panel */
