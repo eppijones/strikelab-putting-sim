@@ -49,6 +49,28 @@ class TrackerSettings:
     stopped_confirm_frames: int = 10
     cooldown_duration_ms: int = 500
     idle_ema_alpha: float = 0.05
+    # Motion direction filter - prevents false triggers from putter swing/hand
+    valid_motion_angle_deg: float = 45.0  # Accept motion within +/- this angle from forward
+    forward_direction_deg: float = 0.0     # Default forward direction (inherited from calibration)
+
+
+@dataclass
+class LensCalibrationData:
+    """Lens distortion calibration data."""
+    camera_matrix: Optional[list] = None   # 3x3 intrinsic matrix as nested list
+    dist_coeffs: Optional[list] = None     # Distortion coefficients [k1, k2, p1, p2, k3]
+    image_size: Optional[tuple] = None     # (width, height)
+    reprojection_error: float = 0.0        # RMS error in pixels
+    calibrated_at: Optional[str] = None
+    
+    def is_valid(self) -> bool:
+        """Check if lens calibration is valid."""
+        return (
+            self.camera_matrix is not None and
+            self.dist_coeffs is not None and
+            len(self.camera_matrix) == 3 and
+            len(self.dist_coeffs) >= 4
+        )
 
 
 @dataclass
@@ -69,6 +91,9 @@ class CalibrationData:
     # Medium friction (putting mat): 0.6-0.8 m/s²
     # Low friction (fast green): 0.4-0.5 m/s²
     virtual_deceleration_m_s2: float = 0.65
+    # Manual override for pixels_per_meter (set to 0 to use auto-calibration)
+    # If auto-calibration gives wrong values, measure manually and set here
+    manual_pixels_per_meter: float = 0.0
     
     def is_valid(self) -> bool:
         """Check if calibration data is valid and complete."""
@@ -94,6 +119,7 @@ class Config:
     detector: DetectorSettings = field(default_factory=DetectorSettings)
     tracker: TrackerSettings = field(default_factory=TrackerSettings)
     calibration: CalibrationData = field(default_factory=CalibrationData)
+    lens_calibration: LensCalibrationData = field(default_factory=LensCalibrationData)
     prediction: PredictionSettings = field(default_factory=PredictionSettings)
     
     # Server settings
@@ -156,6 +182,7 @@ class ConfigManager:
             "detector": asdict(self.config.detector),
             "tracker": asdict(self.config.tracker),
             "calibration": asdict(self.config.calibration),
+            "lens_calibration": asdict(self.config.lens_calibration),
             "prediction": asdict(self.config.prediction),
             "server_host": self.config.server_host,
             "server_port": self.config.server_port,
@@ -172,6 +199,8 @@ class ConfigManager:
             self._update_dataclass(self.config.tracker, data["tracker"])
         if "calibration" in data:
             self._update_dataclass(self.config.calibration, data["calibration"])
+        if "lens_calibration" in data:
+            self._update_dataclass(self.config.lens_calibration, data["lens_calibration"])
         if "prediction" in data:
             self._update_dataclass(self.config.prediction, data["prediction"])
         

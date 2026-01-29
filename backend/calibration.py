@@ -55,17 +55,22 @@ class AutoCalibrator:
         self._calibration_confidence = 0.0
         self._last_ball_radius: Optional[float] = None
         
-    def update(self, ball_radius_px: float, ball_confidence: float) -> bool:
+    def update(self, ball_radius_px: float, ball_confidence: float, is_shot_active: bool = False) -> bool:
         """
         Update auto-calibration with a new ball detection.
         
         Args:
             ball_radius_px: Detected ball radius in pixels
             ball_confidence: Detection confidence [0, 1]
+            is_shot_active: If True, skip calibration updates (shot in progress)
             
         Returns:
             True if calibration is stable and ready to use
         """
+        # Don't update calibration during active shots - prevents distance drift
+        if is_shot_active:
+            return self._is_calibrated
+        
         # Only use high-confidence detections
         if ball_confidence < 0.8:
             return self._is_calibrated
@@ -93,13 +98,17 @@ class AutoCalibrator:
         if cv < 0.10:  # Stable readings
             # Compute pixels_per_meter from ball diameter
             ball_diameter_px = mean_radius * 2
-            self._pixels_per_meter = ball_diameter_px / GOLF_BALL_DIAMETER_M
+            new_ppm = ball_diameter_px / GOLF_BALL_DIAMETER_M
+            
+            # Only log when calibration changes significantly (>1%) or first calibration
+            if self._pixels_per_meter is None or abs(new_ppm - self._pixels_per_meter) > self._pixels_per_meter * 0.01:
+                logger.info(f"Auto-calibration: radius={mean_radius:.1f}px, "
+                           f"pixels_per_meter={new_ppm:.1f}, "
+                           f"confidence={1.0 - cv:.2f}")
+            
+            self._pixels_per_meter = new_ppm
             self._is_calibrated = True
             self._calibration_confidence = 1.0 - cv
-            
-            logger.info(f"Auto-calibration: radius={mean_radius:.1f}px, "
-                       f"pixels_per_meter={self._pixels_per_meter:.1f}, "
-                       f"confidence={self._calibration_confidence:.2f}")
             return True
         
         return self._is_calibrated

@@ -179,9 +179,12 @@ class ShotResult:
     frames_to_speed: int     # Frames from impact to first stable speed
     trajectory: List[Tuple[float, float]]
     duration_ms: float
+    physical_distance_px: float = 0.0  # Distance traveled in camera view
     virtual_distance_px: float = 0.0   # Distance traveled virtually (after frame exit)
     total_distance_px: float = 0.0     # Total distance (physical + virtual)
     exited_frame: bool = False         # Whether ball exited the camera view
+    # Frozen calibration value used for this shot (for consistent distance reporting)
+    pixels_per_meter: float = 1150.0
     
 
 @dataclass
@@ -239,8 +242,9 @@ class BallTracker:
     
     # MOTION lane parameters
     MOTION_RAW_FRAMES = 10          # Frames without smoothing after impact
-    VELOCITY_WINDOW = 3             # Frames for initial velocity computation (fast)
-    VELOCITY_WINDOW_STABLE = 5      # Frames for stable velocity computation
+    VELOCITY_WINDOW = 5             # Frames for initial velocity computation (more samples)
+    VELOCITY_WINDOW_STABLE = 8      # Frames for stable velocity computation
+    EXIT_VELOCITY_WINDOW = 12       # Frames for exit velocity calculation (even more for accuracy)
     ROI_PADDING = 100               # Pixels to pad around ball for ROI tracking
     
     # Background model parameters
@@ -252,11 +256,16 @@ class BallTracker:
     MIN_CONFIDENCE_THRESHOLD = 0.7  # Minimum detection confidence
     MAX_POSITION_JUMP_PX = 100      # Large jump = ball placement, not shot
     MIN_SHOT_FRAMES = 5             # Minimum frames for valid shot
+    MIN_SHOT_DISTANCE_PX = 50       # Minimum physical distance for valid shot (rejects false triggers)
     
     # Frame exit detection - for virtual ball continuation
     FRAME_EXIT_MARGIN_PX = 30       # Ball considered "exited" when this close to edge
     MIN_EXIT_SPEED_PX_S = 100       # Minimum speed to trigger virtual rolling
     MIN_TRACKING_FRAMES_FOR_EXIT = 10  # Need enough data for curve estimation
+    
+    # Motion direction filter - prevents false triggers from putter swing/hand movement
+    VALID_MOTION_ANGLE_DEG = 45.0   # Accept motion within +/- this angle from forward
+    FORWARD_DIRECTION_DEG = 0.0     # Default forward direction (0 = right, updated from calibration)
     
     # Virtual ball physics - LINEAR DECELERATION MODEL
     # Real putting physics: constant friction force → constant deceleration
@@ -280,7 +289,9 @@ class BallTracker:
         stopped_confirm_frames: Optional[int] = None,
         cooldown_duration_ms: Optional[int] = None,
         idle_ema_alpha: Optional[float] = None,
-        deceleration_px_s2: Optional[float] = None
+        deceleration_px_s2: Optional[float] = None,
+        valid_motion_angle_deg: Optional[float] = None,
+        forward_direction_deg: Optional[float] = None
     ):
         self._state = ShotState.ARMED
         self._lane = TrackerLane.IDLE
@@ -305,6 +316,14 @@ class BallTracker:
             # If passed in px/s², convert to m/s² using default ppm
             self.DECELERATION_M_S2 = deceleration_px_s2 / 1150.0
             logger.info(f"Virtual ball deceleration set to {self.DECELERATION_M_S2:.3f} m/s²")
+        if valid_motion_angle_deg is not None:
+            self.VALID_MOTION_ANGLE_DEG = valid_motion_angle_deg
+        if forward_direction_deg is not None:
+            self.FORWARD_DIRECTION_DEG = forward_direction_deg
+        
+        # Motion direction filter state
+        self._forward_direction_deg = self.FORWARD_DIRECTION_DEG
+        self._valid_motion_angle_deg = self.VALID_MOTION_ANGLE_DEG
         
         # Position tracking
         self._current_pos: Optional[Tuple[float, float]] = None
@@ -685,6 +704,57 @@ class BallTracker:
         self._velocity = Velocity(vx=vx, vy=vy)
         self._velocity_history.append(self._velocity)
     
+    def _compute_exit_velocity(self) -> Optional[Velocity]:
+        """
+        Compute exit velocity using weighted average of recent frames.
+        
+        Uses exponential weighting so more recent frames have higher influence.
+        This provides a smoother, more accurate velocity estimate at frame exit.
+        
+        Returns:
+            Velocity object with weighted average vx, vy, or None if insufficient data
+        """
+        if len(self._raw_trajectory) < self.EXIT_VELOCITY_WINDOW:
+            # Fall back to current velocity if not enough data
+            return self._velocity
+        
+        points = list(self._raw_trajectory)[-self.EXIT_VELOCITY_WINDOW:]
+        if len(points) < 5:
+            return self._velocity
+        
+        # Calculate instantaneous velocities between consecutive points
+        velocities = []
+        for i in range(1, len(points)):
+            p1 = points[i - 1]
+            p2 = points[i]
+            
+            dt_s = (p2.timestamp_ns - p1.timestamp_ns) / 1e9
+            if dt_s <= 0:
+                continue
+            
+            vx = (p2.x - p1.x) / dt_s
+            vy = (p2.y - p1.y) / dt_s
+            velocities.append((vx, vy))
+        
+        if len(velocities) < 3:
+            return self._velocity
+        
+        # Exponential weights: more recent = higher weight
+        # np.exp(np.linspace(-2, 0, n)) gives weights from ~0.14 to 1.0
+        weights = np.exp(np.linspace(-2, 0, len(velocities)))
+        weights = weights / weights.sum()  # Normalize to sum to 1
+        
+        # Weighted average velocity
+        vx_weighted = sum(w * v[0] for w, v in zip(weights, velocities))
+        vy_weighted = sum(w * v[1] for w, v in zip(weights, velocities))
+        
+        result = Velocity(vx=vx_weighted, vy=vy_weighted)
+        
+        logger.debug(f"Exit velocity computed: {result.speed:.1f} px/s @ {result.direction_deg:.1f}° "
+                    f"(from {len(velocities)} samples)")
+        
+        return result
+    
     def _check_transitions(self, detection: Detection, timestamp_ns: int, frame_id: int):
         """Check for state machine transitions."""
         if self._state == ShotState.ARMED:
@@ -701,6 +771,7 @@ class BallTracker:
         Uses displacement from locked position.
         Requires MOTION_CONFIRM_FRAMES consecutive triggers to prevent false shots.
         Must maintain motion direction (not just jitter in place).
+        Motion direction must be within VALID_MOTION_ANGLE_DEG of forward direction.
         """
         if self._smoothed_pos is None:
             return
@@ -716,15 +787,36 @@ class BallTracker:
         
         # Use locked position if available for more stable trigger
         ref_pos = self._locked_pos if self._locked_pos else self._smoothed_pos
-        displacement = np.sqrt(
-            (new_pos[0] - ref_pos[0])**2 +
-            (new_pos[1] - ref_pos[1])**2
-        )
+        
+        # Calculate displacement and direction
+        dx = new_pos[0] - ref_pos[0]
+        dy = new_pos[1] - ref_pos[1]
+        displacement = np.sqrt(dx**2 + dy**2)
         
         # Motion triggered only by significant displacement
         motion_detected = displacement > self.MOTION_THRESHOLD_PX
         
         if motion_detected:
+            # Check motion direction against valid putting direction
+            motion_direction = np.degrees(np.arctan2(dy, dx))
+            
+            # Calculate angle difference from forward direction
+            angle_diff = abs(motion_direction - self._forward_direction_deg)
+            if angle_diff > 180:
+                angle_diff = 360 - angle_diff
+            
+            # Reject motion that's not within valid angle of forward direction
+            if angle_diff > self._valid_motion_angle_deg:
+                logger.debug(
+                    f"Motion rejected: direction {motion_direction:.1f}° not within "
+                    f"+/-{self._valid_motion_angle_deg:.1f}° of forward {self._forward_direction_deg:.1f}° "
+                    f"(diff={angle_diff:.1f}°)"
+                )
+                self._motion_trigger_count = 0
+                if hasattr(self, '_motion_start_pos'):
+                    del self._motion_start_pos
+                return
+            
             self._motion_trigger_count += 1
             
             # Track accumulated motion to distinguish real motion from jitter
@@ -739,7 +831,8 @@ class BallTracker:
             
             logger.debug(
                 f"Motion trigger {self._motion_trigger_count}/{self.MOTION_CONFIRM_FRAMES}: "
-                f"displacement={displacement:.1f}px, accumulated={accumulated_dist:.1f}px"
+                f"displacement={displacement:.1f}px, accumulated={accumulated_dist:.1f}px, "
+                f"direction={motion_direction:.1f}° (valid)"
             )
             
             # Require both consecutive triggers AND accumulated distance
@@ -812,13 +905,26 @@ class BallTracker:
     def _transition_to_stopped(self, frame_id: int):
         """Transition from TRACKING to STOPPED."""
         logger.info(f"TRACKING -> STOPPED at frame {frame_id}")
+        
+        # Check if this is a valid shot (minimum distance traveled)
+        if len(self._trajectory) >= 2:
+            start = self._trajectory[0]
+            end = self._trajectory[-1]
+            physical_dist = np.sqrt((end.x - start.x)**2 + (end.y - start.y)**2)
+            
+            if physical_dist < self.MIN_SHOT_DISTANCE_PX:
+                # Too short - likely a false trigger (putter swing, hand movement)
+                logger.warning(f"Shot rejected: physical distance {physical_dist:.1f}px < minimum {self.MIN_SHOT_DISTANCE_PX}px (likely false trigger)")
+                self._transition_to_armed()
+                return
+        
         self._state = ShotState.STOPPED
         
         # Compute shot result
         self._compute_shot_result(frame_id)
     
     def _compute_shot_result(self, frame_id: int):
-        """Compute final shot metrics."""
+        """Compute final shot metrics. Called once when shot stops - values are frozen."""
         trajectory_points = [(p.x, p.y) for p in self._trajectory]
         
         # Get initial velocity (use stored impact velocity or compute)
@@ -852,27 +958,30 @@ class BallTracker:
         if self._virtual_ball:
             duration_ms += self._virtual_ball.time_since_exit * 1000
         
-        # Physical distance (trajectory in frame)
+        # Physical distance (trajectory in frame) - FROZEN at computation time
         physical_distance_px = 0.0
         if trajectory_points:
             start_pos = trajectory_points[0]
             end_pos = trajectory_points[-1]
             physical_distance_px = np.sqrt((end_pos[0] - start_pos[0])**2 + (end_pos[1] - start_pos[1])**2)
         
-        # Virtual distance (after frame exit)
+        # Virtual distance (after frame exit) - FROZEN at computation time
         virtual_distance_px = 0.0
         exited_frame = False
         if self._virtual_ball:
             virtual_distance_px = self._virtual_ball.distance_traveled
             exited_frame = True
         
-        # Total distance
+        # Total distance - FROZEN at computation time
         total_distance_px = physical_distance_px + virtual_distance_px
         
+        # Freeze the calibration value used for this shot
+        frozen_ppm = self._current_pixels_per_meter
+        
         # Log trajectory info for debugging
-        logger.info(f"Trajectory: {len(trajectory_points)} points, "
+        logger.info(f"Shot result FROZEN: {len(trajectory_points)} points, "
                    f"physical={physical_distance_px:.1f}px, virtual={virtual_distance_px:.1f}px, "
-                   f"total={total_distance_px:.1f}px")
+                   f"total={total_distance_px:.1f}px, ppm={frozen_ppm:.1f}")
         
         self._shot_result = ShotResult(
             initial_speed_px_s=initial_speed,
@@ -881,9 +990,11 @@ class BallTracker:
             frames_to_speed=frames_to_speed,
             trajectory=trajectory_points,  # Full trajectory (no longer slicing)
             duration_ms=duration_ms,
+            physical_distance_px=physical_distance_px,
             virtual_distance_px=virtual_distance_px,
             total_distance_px=total_distance_px,
-            exited_frame=exited_frame
+            exited_frame=exited_frame,
+            pixels_per_meter=frozen_ppm
         )
         
         logger.info(f"Shot result: speed={initial_speed:.1f}px/s, dir={initial_direction:.1f}°, "
@@ -1006,6 +1117,19 @@ class BallTracker:
         """Set deceleration in m/s²."""
         self.DECELERATION_M_S2 = deceleration
         logger.info(f"Virtual ball deceleration set to {deceleration:.3f} m/s²")
+    
+    def set_forward_direction(self, direction_deg: float):
+        """
+        Set the forward putting direction (from calibration).
+        Motion must be within VALID_MOTION_ANGLE_DEG of this direction to trigger tracking.
+        """
+        self._forward_direction_deg = direction_deg
+        logger.info(f"Forward direction set to {direction_deg:.1f}°")
+    
+    def set_valid_motion_angle(self, angle_deg: float):
+        """Set the valid motion angle tolerance (+/- from forward direction)."""
+        self._valid_motion_angle_deg = angle_deg
+        logger.info(f"Valid motion angle set to +/-{angle_deg:.1f}°")
     
     @property
     def trajectory(self) -> List[Tuple[float, float]]:
@@ -1184,12 +1308,18 @@ class BallTracker:
         
         # Capture exit state
         exit_pos = self._last_valid_position or self._current_pos
-        exit_vel = self._last_valid_velocity or self._velocity
+        
+        # Use weighted average exit velocity for more accurate virtual roll
+        exit_vel = self._compute_exit_velocity()
+        if exit_vel is None:
+            exit_vel = self._last_valid_velocity or self._velocity
         
         if exit_pos is None or exit_vel is None:
             logger.error("Cannot transition to virtual rolling: missing position/velocity")
             self._transition_to_stopped(frame_id)
             return
+        
+        logger.info(f"Exit velocity (weighted): {exit_vel.speed:.1f} px/s @ {exit_vel.direction_deg:.1f}°")
         
         curvature = self._compute_trajectory_curvature()
         

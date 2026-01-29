@@ -5,6 +5,7 @@ FastAPI server with WebSocket streaming and camera capture loop.
 
 import argparse
 import asyncio
+import cv2
 import json
 import logging
 import time
@@ -26,6 +27,7 @@ from .tracker import BallTracker, TrackerState, ShotState, VirtualBallState
 from .calibration import Calibrator, AutoCalibrator
 from .predictor import BallPredictor
 from .config import get_config_manager, get_config
+from .lens_calibration import load_lens_calibration, get_undistort_maps, LENS_PARAMS_FILE
 
 # Configure logging
 logging.basicConfig(
@@ -109,12 +111,18 @@ class PuttingSimApp:
             stopped_velocity_threshold=config.tracker.stopped_velocity_threshold,
             stopped_confirm_frames=config.tracker.stopped_confirm_frames,
             cooldown_duration_ms=config.tracker.cooldown_duration_ms,
-            idle_ema_alpha=config.tracker.idle_ema_alpha
+            idle_ema_alpha=config.tracker.idle_ema_alpha,
+            valid_motion_angle_deg=getattr(config.tracker, 'valid_motion_angle_deg', 45.0),
+            forward_direction_deg=getattr(config.tracker, 'forward_direction_deg', 0.0)
         )
         
         # Set deceleration from config (in m/s², will be converted to px/s² using current calibration)
         decel_m_s2 = getattr(config.calibration, 'virtual_deceleration_m_s2', 0.55)
         self.tracker.set_deceleration_m_s2(decel_m_s2)
+        
+        # Sync forward direction from calibration to tracker (calibration is the source of truth)
+        if config.calibration.is_valid():
+            self.tracker.set_forward_direction(config.calibration.forward_direction_deg)
         
         self.calibrator = Calibrator()
         self.auto_calibrator = AutoCalibrator(stabilization_frames=30)
@@ -153,6 +161,22 @@ class PuttingSimApp:
                 "origin_px": config.calibration.origin_px,
                 "forward_direction_deg": config.calibration.forward_direction_deg
             })
+        
+        # Load lens distortion calibration (one-time setup)
+        self._lens_calibrated = False
+        self._camera_matrix: Optional[np.ndarray] = None
+        self._dist_coeffs: Optional[np.ndarray] = None
+        self._undistort_map1: Optional[np.ndarray] = None
+        self._undistort_map2: Optional[np.ndarray] = None
+        
+        lens_result = load_lens_calibration()
+        if lens_result and lens_result.success:
+            self._camera_matrix = np.array(lens_result.camera_matrix)
+            self._dist_coeffs = np.array(lens_result.dist_coeffs)
+            self._lens_calibrated = True
+            logger.info(f"Lens calibration loaded (error: {lens_result.reprojection_error:.3f}px)")
+        else:
+            logger.info("No lens calibration - run 'python -m backend.lens_calibration --live' to calibrate")
     
     def start(self):
         """Start camera capture and processing."""
@@ -215,35 +239,77 @@ class PuttingSimApp:
             
             self._last_proc_time = proc_time
             self._frame_id = frame_data.frame_id
-            self._current_frame = frame_data.frame
+            # Store undistorted frame for video streaming
+            if self._lens_calibrated and self._undistort_map1 is not None:
+                self._current_frame = cv2.remap(frame_data.frame, self._undistort_map1, self._undistort_map2, cv2.INTER_LINEAR)
+            else:
+                self._current_frame = frame_data.frame
     
     def _process_frame(self, frame_data: FrameData):
         """Process a single frame."""
-        # Detect ball
-        detection = self.detector.detect(frame_data.frame)
+        frame = frame_data.frame
+        
+        # Apply lens undistortion if calibrated
+        if self._lens_calibrated and self._camera_matrix is not None:
+            # Initialize undistort maps on first frame (for faster undistortion)
+            if self._undistort_map1 is None:
+                h, w = frame.shape[:2]
+                self._undistort_map1, self._undistort_map2 = get_undistort_maps(
+                    self._camera_matrix, self._dist_coeffs, (w, h)
+                )
+                logger.info(f"Initialized undistortion maps for {w}x{h}")
+            
+            # Fast undistortion using precomputed maps
+            frame = cv2.remap(frame, self._undistort_map1, self._undistort_map2, cv2.INTER_LINEAR)
+        
+        # Detect ball on undistorted frame
+        detection = self.detector.detect(frame)
         
         # Update tracker with frame for background model motion detection
         self._current_state = self.tracker.update(
             detection,
             frame_data.timestamp_ns,
             frame_data.frame_id,
-            frame=frame_data.frame
+            frame=frame  # Use undistorted frame
         )
         
-        # Auto-calibrate from ball size when idle (ball is stationary)
-        if detection and self._current_state and self._current_state.state == ShotState.ARMED:
-            self.auto_calibrator.update(detection.radius, detection.confidence)
-            # Update tracker with current calibration for accurate virtual physics
-            if self.auto_calibrator.is_calibrated:
+        # Determine if a shot is active (any state except ARMED)
+        current_state = self._current_state.state if self._current_state else ShotState.ARMED
+        is_shot_active = current_state not in (ShotState.ARMED, ShotState.COOLDOWN)
+        
+        # Lock calibration at TRACKING start (not STOPPED) to prevent mid-shot drift
+        if current_state == ShotState.TRACKING and self._shot_locked_ppm is None:
+            self._shot_locked_ppm = self.get_pixels_per_meter()
+            self.tracker.set_calibration(self._shot_locked_ppm)
+            logger.info(f"Calibration locked at TRACKING start: {self._shot_locked_ppm:.1f} px/m")
+        elif current_state == ShotState.ARMED:
+            # Reset lock when returning to ARMED (ready for new shot)
+            self._shot_locked_ppm = None
+        
+        # Auto-calibrate from ball size only when idle (ball is stationary, no shot active)
+        if detection and self._current_state:
+            self.auto_calibrator.update(
+                detection.radius, 
+                detection.confidence, 
+                is_shot_active=is_shot_active
+            )
+            # Update tracker with current calibration when ARMED (not during shot)
+            if self.auto_calibrator.is_calibrated and current_state == ShotState.ARMED:
                 self.tracker.set_calibration(self.auto_calibrator.pixels_per_meter)
     
     def get_pixels_per_meter(self) -> float:
         """
         Get the best available pixels_per_meter value.
-        Prefers auto-calibration, falls back to manual calibration.
+        Priority: manual override > auto-calibration > homography calibration > default
         Applies distance_scale_factor from config for fine-tuning.
         """
-        if self.auto_calibrator.is_calibrated:
+        config = get_config()
+        
+        # Check for manual override first (most reliable if user has measured)
+        manual_ppm = getattr(config.calibration, 'manual_pixels_per_meter', 0.0)
+        if manual_ppm and manual_ppm > 0:
+            base_ppm = manual_ppm
+        elif self.auto_calibrator.is_calibrated:
             base_ppm = self.auto_calibrator.pixels_per_meter
         elif self.calibrator.is_calibrated:
             base_ppm = self.calibrator.pixels_per_meter
@@ -254,7 +320,6 @@ class PuttingSimApp:
         # Apply distance scale factor from config (for real-world calibration adjustment)
         # If scale_factor > 1.0, distances will be larger (compensates for underestimate)
         # Dividing ppm by scale_factor has same effect as multiplying distance by scale_factor
-        config = get_config()
         scale_factor = getattr(config.calibration, 'distance_scale_factor', 1.0)
         if scale_factor and scale_factor != 1.0:
             return base_ppm / scale_factor
@@ -264,19 +329,8 @@ class PuttingSimApp:
         """Build state message for WebSocket."""
         state = self._current_state
         
-        # Lock calibration when shot finishes to prevent distance drift
-        # This ensures distance doesn't change after ball stops
-        current_shot_state = state.state if state else None
-        
-        if current_shot_state == ShotState.ARMED:
-            # Reset lock when returning to ARMED (ready for new shot)
-            self._shot_locked_ppm = None
-        elif current_shot_state in (ShotState.STOPPED, ShotState.COOLDOWN):
-            # Lock the calibration when shot finishes
-            if self._shot_locked_ppm is None:
-                self._shot_locked_ppm = self.get_pixels_per_meter()
-        
-        # Use locked value if available, otherwise get fresh value
+        # Use locked calibration if available (set at TRACKING start), otherwise get fresh value
+        # This prevents distance drift during and after shots
         pixels_per_meter = self._shot_locked_ppm if self._shot_locked_ppm else self.get_pixels_per_meter()
         
         # Ball data
@@ -357,47 +411,42 @@ class PuttingSimApp:
                         "exit_speed_px_s": round(prediction.initial_speed, 1)
                     }
         
-        # Shot result
+        # Shot result - use FROZEN values from the shot result to prevent jumping
         shot_data = None
         if state and state.shot_result:
             result = state.shot_result
             
-            # Convert to world coordinates using best available calibration
-            speed_m_s = result.initial_speed_px_s / pixels_per_meter
-            direction_deg = result.initial_direction_deg  # Use raw direction for now
+            # Use the frozen pixels_per_meter from when the shot was computed
+            # This prevents the distance from changing after the shot stops
+            shot_ppm = result.pixels_per_meter if result.pixels_per_meter > 0 else pixels_per_meter
             
-            # Physical distance from trajectory (in-frame)
-            physical_distance_px = 0.0
-            physical_distance_m = 0.0
-            if len(result.trajectory) >= 2:
-                start = result.trajectory[0]
-                end = result.trajectory[-1]
-                dx = end[0] - start[0]
-                dy = end[1] - start[1]
-                physical_distance_px = np.sqrt(dx**2 + dy**2)
-                physical_distance_m = physical_distance_px / pixels_per_meter
+            # Convert to world coordinates using frozen calibration
+            speed_m_s = result.initial_speed_px_s / shot_ppm
+            direction_deg = result.initial_direction_deg
             
-            # Virtual distance (off-frame rolling)
+            # Use FROZEN distances from shot result (computed once at stop time)
+            physical_distance_px = result.physical_distance_px
+            physical_distance_m = physical_distance_px / shot_ppm
+            
             virtual_distance_px = result.virtual_distance_px
-            virtual_distance_m = virtual_distance_px / pixels_per_meter
+            virtual_distance_m = virtual_distance_px / shot_ppm
             
-            # Total distance
-            total_distance_px = result.total_distance_px if result.total_distance_px > 0 else physical_distance_px
-            total_distance_m = total_distance_px / pixels_per_meter
+            total_distance_px = result.total_distance_px
+            total_distance_m = total_distance_px / shot_ppm
             
             shot_data = {
                 "speed_m_s": round(speed_m_s, 3),
                 "speed_px_s": round(result.initial_speed_px_s, 1),
                 "direction_deg": round(direction_deg, 2),
-                # Physical distance (visible in camera)
+                # Physical distance (visible in camera) - FROZEN
                 "physical_distance_m": round(physical_distance_m, 4),
                 "physical_distance_cm": round(physical_distance_m * 100, 1),
                 "physical_distance_px": round(physical_distance_px, 1),
-                # Virtual distance (simulated off-frame)
+                # Virtual distance (simulated off-frame) - FROZEN
                 "virtual_distance_m": round(virtual_distance_m, 4),
                 "virtual_distance_cm": round(virtual_distance_m * 100, 1),
                 "virtual_distance_px": round(virtual_distance_px, 1),
-                # Total distance (physical + virtual)
+                # Total distance (physical + virtual) - FROZEN
                 "distance_m": round(total_distance_m, 4),
                 "distance_cm": round(total_distance_m * 100, 1),
                 "distance_px": round(total_distance_px, 1),
@@ -433,6 +482,7 @@ class PuttingSimApp:
             "metrics": metrics,
             "calibrated": self.calibrator.is_calibrated or self.auto_calibrator.is_calibrated,
             "auto_calibrated": self.auto_calibrator.is_calibrated,
+            "lens_calibrated": self._lens_calibrated,
             "pixels_per_meter": round(pixels_per_meter, 1),
             "resolution": list(self.camera.resolution) if self.camera else [1280, 800]
         }
@@ -892,6 +942,162 @@ async def correct_calibration_scale(data: dict):
     except Exception as e:
         logger.error(f"Calibration correction failed: {e}")
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@app.get("/api/calibrate/lens-status")
+async def get_lens_calibration_status():
+    """Get lens distortion calibration status."""
+    try:
+        sim = get_app_instance()
+        
+        result = load_lens_calibration()
+        
+        return JSONResponse({
+            "calibrated": sim._lens_calibrated,
+            "file_exists": LENS_PARAMS_FILE.exists(),
+            "reprojection_error": result.reprojection_error if result else None,
+            "num_images_used": result.num_images_used if result else None,
+            "calibrated_at": result.calibrated_at if result else None,
+            "instructions": "Run 'python -m backend.lens_calibration --live' to calibrate" if not sim._lens_calibrated else None
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/calibrate/verify")
+async def verify_calibration(data: dict):
+    """
+    Verify calibration accuracy by comparing measured vs actual distance.
+    
+    Place the ball at a known distance from the start position, then call this
+    endpoint with the actual physical distance to compare.
+    
+    Expected data:
+    {
+        "actual_distance_cm": 50.0  # The real physical distance in cm
+    }
+    
+    Returns comparison between system measurement and actual distance.
+    """
+    try:
+        sim = get_app_instance()
+        state = sim._current_state
+        
+        actual_cm = data.get("actual_distance_cm")
+        if actual_cm is None:
+            return JSONResponse({
+                "success": False,
+                "error": "actual_distance_cm is required"
+            }, status_code=400)
+        
+        if not state or not state.shot_result:
+            return JSONResponse({
+                "success": False,
+                "error": "No shot recorded. Make a putt first, then verify."
+            })
+        
+        # Get measured distance
+        pixels_per_meter = sim.get_pixels_per_meter()
+        total_distance_px = state.shot_result.total_distance_px
+        measured_cm = (total_distance_px / pixels_per_meter) * 100
+        
+        # Calculate error
+        error_cm = measured_cm - actual_cm
+        error_percent = (error_cm / actual_cm) * 100 if actual_cm > 0 else 0
+        
+        # Determine accuracy rating
+        if abs(error_percent) < 3:
+            rating = "excellent"
+        elif abs(error_percent) < 5:
+            rating = "good"
+        elif abs(error_percent) < 10:
+            rating = "acceptable"
+        else:
+            rating = "needs_calibration"
+        
+        return JSONResponse({
+            "success": True,
+            "actual_cm": round(actual_cm, 1),
+            "measured_cm": round(measured_cm, 1),
+            "error_cm": round(error_cm, 2),
+            "error_percent": round(error_percent, 2),
+            "accuracy_rating": rating,
+            "pixels_per_meter": round(pixels_per_meter, 1),
+            "lens_calibrated": sim._lens_calibrated,
+            "suggestion": (
+                "Consider running lens calibration" if not sim._lens_calibrated and abs(error_percent) > 5
+                else "Calibration looks good" if abs(error_percent) < 5
+                else f"Try adjusting distance_scale_factor to {round(actual_cm / measured_cm, 3)}" if measured_cm > 0
+                else "Unable to suggest adjustment"
+            )
+        })
+        
+    except Exception as e:
+        logger.error(f"Calibration verification failed: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@app.get("/api/diagnostics")
+async def get_diagnostics():
+    """
+    Get comprehensive diagnostic information for debugging accuracy issues.
+    
+    Returns detailed state about calibration, tracking, and recent shots.
+    """
+    try:
+        sim = get_app_instance()
+        state = sim._current_state
+        
+        # Build diagnostic report
+        diagnostics = {
+            "calibration": {
+                "lens_calibrated": sim._lens_calibrated,
+                "auto_calibrated": sim.auto_calibrator.is_calibrated,
+                "manual_calibrated": sim.calibrator.is_calibrated,
+                "current_pixels_per_meter": round(sim.get_pixels_per_meter(), 1),
+                "shot_locked_ppm": round(sim._shot_locked_ppm, 1) if sim._shot_locked_ppm else None,
+                "auto_calibrator_confidence": round(sim.auto_calibrator.confidence, 3) if sim.auto_calibrator.is_calibrated else None
+            },
+            "tracker": {
+                "state": state.state.value if state else "unknown",
+                "lane": state.lane.value if state else "unknown",
+                "forward_direction_deg": round(sim.tracker._forward_direction_deg, 1),
+                "valid_motion_angle_deg": round(sim.tracker._valid_motion_angle_deg, 1),
+                "deceleration_m_s2": round(sim.tracker.DECELERATION_M_S2, 3),
+                "deceleration_px_s2": round(sim.tracker.get_deceleration_px_s2(), 1)
+            },
+            "last_shot": None,
+            "system": {
+                "camera_resolution": list(sim.camera.resolution) if sim.camera else None,
+                "cap_fps": round(sim._cap_fps.tick(), 1),
+                "proc_fps": round(sim._proc_fps.tick(), 1)
+            }
+        }
+        
+        # Add last shot details if available
+        if state and state.shot_result:
+            result = state.shot_result
+            ppm = sim.get_pixels_per_meter()
+            
+            diagnostics["last_shot"] = {
+                "initial_speed_px_s": round(result.initial_speed_px_s, 1),
+                "initial_speed_m_s": round(result.initial_speed_px_s / ppm, 3),
+                "direction_deg": round(result.initial_direction_deg, 2),
+                "physical_distance_px": round(result.total_distance_px - result.virtual_distance_px, 1),
+                "virtual_distance_px": round(result.virtual_distance_px, 1),
+                "total_distance_px": round(result.total_distance_px, 1),
+                "total_distance_m": round(result.total_distance_px / ppm, 4),
+                "total_distance_cm": round((result.total_distance_px / ppm) * 100, 1),
+                "exited_frame": result.exited_frame,
+                "duration_ms": round(result.duration_ms, 1),
+                "trajectory_points": len(result.trajectory)
+            }
+        
+        return JSONResponse(diagnostics)
+        
+    except Exception as e:
+        logger.error(f"Diagnostics failed: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/api/calibrate/detect-aruco")
