@@ -52,6 +52,9 @@ class TrackerSettings:
     # Motion direction filter - prevents false triggers from putter swing/hand
     valid_motion_angle_deg: float = 45.0  # Accept motion within +/- this angle from forward
     forward_direction_deg: float = 0.0     # Default forward direction (inherited from calibration)
+    # Timestamp-based stop detection (replaces frame-count-based)
+    # Ball must be below stopped_velocity_threshold for this duration to confirm stop
+    stopped_confirm_time_ms: int = 100  # ~12 frames at 120fps
 
 
 @dataclass
@@ -94,6 +97,10 @@ class CalibrationData:
     # Manual override for pixels_per_meter (set to 0 to use auto-calibration)
     # If auto-calibration gives wrong values, measure manually and set here
     manual_pixels_per_meter: float = 0.0
+    # UI overlay scale - multiply detected radius by this for display ONLY
+    # Does NOT affect tracking or detection - purely visual
+    # Typical range: 1.14-1.18 (ball appears ~13% smaller in detection than reality)
+    overlay_radius_scale: float = 1.15
     
     def is_valid(self) -> bool:
         """Check if calibration data is valid and complete."""

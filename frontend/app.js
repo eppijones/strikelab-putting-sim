@@ -532,23 +532,28 @@ class PuttingSimApp {
     drawBall(ball) {
         const x = ball.x_px;
         const y = ball.y_px;
-        const radius = ball.radius_px || 12;
+        const detectedRadius = ball.radius_px || 12;
+        
+        // Apply overlay scale for display ONLY - does not affect tracking
+        // This corrects for the ~13% underdraw of the detected radius
+        const overlayScale = this.state?.overlay_radius_scale || 1.15;
+        const displayRadius = detectedRadius * overlayScale;
         
         // Glow effect
-        const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, radius * 2);
+        const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, displayRadius * 2);
         gradient.addColorStop(0, 'rgba(255, 255, 255, 0.3)');
         gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
         this.ctx.fillStyle = gradient;
         this.ctx.beginPath();
-        this.ctx.arc(x, y, radius * 2, 0, Math.PI * 2);
+        this.ctx.arc(x, y, displayRadius * 2, 0, Math.PI * 2);
         this.ctx.fill();
         
-        // Ball
+        // Ball with scaled radius
         this.ctx.fillStyle = '#fff';
         this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
         this.ctx.lineWidth = 1;
         this.ctx.beginPath();
-        this.ctx.arc(x, y, radius, 0, Math.PI * 2);
+        this.ctx.arc(x, y, displayRadius, 0, Math.PI * 2);
         this.ctx.fill();
         this.ctx.stroke();
     }
@@ -634,20 +639,24 @@ class PuttingSimApp {
     drawVirtualBall(ball) {
         const x = ball.x_px;
         const y = ball.y_px;
-        const radius = ball.radius_px || 12;
+        const detectedRadius = ball.radius_px || 12;
+        
+        // Apply overlay scale for display ONLY - does not affect tracking
+        const overlayScale = this.state?.overlay_radius_scale || 1.15;
+        const displayRadius = detectedRadius * overlayScale;
         
         // Pulsing glow effect for virtual ball
         const time = performance.now() / 500;
         const pulseIntensity = 0.3 + 0.2 * Math.sin(time);
         
         // Larger, more dramatic glow
-        const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, radius * 3);
+        const gradient = this.ctx.createRadialGradient(x, y, 0, x, y, displayRadius * 3);
         gradient.addColorStop(0, `rgba(100, 200, 255, ${pulseIntensity})`);
         gradient.addColorStop(0.5, `rgba(100, 200, 255, ${pulseIntensity * 0.5})`);
         gradient.addColorStop(1, 'rgba(100, 200, 255, 0)');
         this.ctx.fillStyle = gradient;
         this.ctx.beginPath();
-        this.ctx.arc(x, y, radius * 3, 0, Math.PI * 2);
+        this.ctx.arc(x, y, displayRadius * 3, 0, Math.PI * 2);
         this.ctx.fill();
         
         // Virtual ball - semi-transparent with cyan tint
@@ -655,14 +664,14 @@ class PuttingSimApp {
         this.ctx.strokeStyle = 'rgba(100, 200, 255, 0.9)';
         this.ctx.lineWidth = 2;
         this.ctx.beginPath();
-        this.ctx.arc(x, y, radius, 0, Math.PI * 2);
+        this.ctx.arc(x, y, displayRadius, 0, Math.PI * 2);
         this.ctx.fill();
         this.ctx.stroke();
         
         // Inner highlight
         this.ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
         this.ctx.beginPath();
-        this.ctx.arc(x - radius * 0.3, y - radius * 0.3, radius * 0.3, 0, Math.PI * 2);
+        this.ctx.arc(x - displayRadius * 0.3, y - displayRadius * 0.3, displayRadius * 0.3, 0, Math.PI * 2);
         this.ctx.fill();
     }
     

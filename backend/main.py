@@ -110,6 +110,7 @@ class PuttingSimApp:
             motion_confirm_frames=config.tracker.motion_confirm_frames,
             stopped_velocity_threshold=config.tracker.stopped_velocity_threshold,
             stopped_confirm_frames=config.tracker.stopped_confirm_frames,
+            stopped_confirm_time_ms=getattr(config.tracker, 'stopped_confirm_time_ms', 100),
             cooldown_duration_ms=config.tracker.cooldown_duration_ms,
             idle_ema_alpha=config.tracker.idle_ema_alpha,
             valid_motion_angle_deg=getattr(config.tracker, 'valid_motion_angle_deg', 45.0),
@@ -467,6 +468,10 @@ class PuttingSimApp:
             "idle_stddev": round(state.idle_stddev, 2) if state else 0.0
         }
         
+        # Get overlay_radius_scale from config (for UI display only)
+        config = get_config()
+        overlay_radius_scale = getattr(config.calibration, 'overlay_radius_scale', 1.15)
+        
         return {
             "frame_id": self._frame_id,
             "timestamp_ms": time.time() * 1000,
@@ -484,6 +489,7 @@ class PuttingSimApp:
             "auto_calibrated": self.auto_calibrator.is_calibrated,
             "lens_calibrated": self._lens_calibrated,
             "pixels_per_meter": round(pixels_per_meter, 1),
+            "overlay_radius_scale": overlay_radius_scale,
             "resolution": list(self.camera.resolution) if self.camera else [1280, 800]
         }
     
@@ -1299,6 +1305,306 @@ async def static_ball_test():
         
     except Exception as e:
         logger.error(f"Static ball test failed: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@app.get("/api/calibration/9-position-overlay-test")
+async def nine_position_overlay_test():
+    """
+    9-position static overlay test for calibration validation.
+    
+    Test positions: center, top, bottom, left, right, 
+                    top-left, top-right, bottom-left, bottom-right
+    
+    For each position, report:
+    - detected_radius_px
+    - expected_radius_px (from ball diameter + ppm)
+    - recommended_overlay_scale
+    - position_name
+    
+    Call this endpoint once with the ball at each position to build a complete report.
+    This endpoint returns the result for the current ball position.
+    """
+    try:
+        sim = get_app_instance()
+        state = sim._current_state
+        config = get_config()
+        
+        if not state or state.ball_x is None:
+            return JSONResponse({
+                "success": False,
+                "error": "No ball detected. Place ball in frame."
+            })
+        
+        # Get current detection info
+        ball_x = state.ball_x
+        ball_y = state.ball_y
+        detected_radius = state.ball_radius
+        confidence = state.ball_confidence
+        
+        # Calculate expected values
+        ppm = sim.get_pixels_per_meter()
+        BALL_DIAMETER_M = 0.04267  # Golf ball diameter 42.67mm
+        expected_radius = (BALL_DIAMETER_M / 2) * ppm
+        
+        # Get current overlay scale from config
+        current_overlay_scale = getattr(config.calibration, 'overlay_radius_scale', 1.15)
+        
+        # Calculate recommended scale
+        recommended_scale = detected_radius / expected_radius if detected_radius and expected_radius > 0 else 1.0
+        
+        # Calculate scale that would make overlay match expected
+        # overlay_radius = detected_radius * scale = expected_radius
+        # So scale = expected_radius / detected_radius (inverse)
+        scale_to_match_real = expected_radius / detected_radius if detected_radius and detected_radius > 0 else 1.0
+        
+        # Determine position in frame (9 positions)
+        frame_w, frame_h = sim.camera.resolution if sim.camera else (1280, 800)
+        
+        # Determine horizontal position
+        if ball_x < frame_w * 0.33:
+            h_pos = "left"
+        elif ball_x > frame_w * 0.67:
+            h_pos = "right"
+        else:
+            h_pos = "center"
+        
+        # Determine vertical position
+        if ball_y < frame_h * 0.33:
+            v_pos = "top"
+        elif ball_y > frame_h * 0.67:
+            v_pos = "bottom"
+        else:
+            v_pos = "center"
+        
+        # Combine for position name
+        if h_pos == "center" and v_pos == "center":
+            position_name = "center"
+        elif h_pos == "center":
+            position_name = v_pos
+        elif v_pos == "center":
+            position_name = h_pos
+        else:
+            position_name = f"{v_pos}-{h_pos}"
+        
+        return JSONResponse({
+            "success": True,
+            "position": {
+                "x_px": round(ball_x, 1),
+                "y_px": round(ball_y, 1),
+                "position_name": position_name,
+                "normalized_x": round(ball_x / frame_w, 3),
+                "normalized_y": round(ball_y / frame_h, 3)
+            },
+            "radius": {
+                "detected_px": round(detected_radius, 2) if detected_radius else None,
+                "expected_px": round(expected_radius, 2),
+                "ratio_detected_to_expected": round(detected_radius / expected_radius, 3) if detected_radius and expected_radius > 0 else None
+            },
+            "overlay_scale": {
+                "current_config_scale": current_overlay_scale,
+                "recommended_scale": round(scale_to_match_real, 3),
+                "scale_difference": round(scale_to_match_real - current_overlay_scale, 3)
+            },
+            "confidence": round(confidence, 3) if confidence else None,
+            "calibration": {
+                "pixels_per_meter": round(ppm, 1),
+                "ball_diameter_m": BALL_DIAMETER_M
+            },
+            "instructions": (
+                f"Current position: {position_name}. "
+                f"For complete test, place ball at all 9 positions: "
+                f"center, top, bottom, left, right, top-left, top-right, bottom-left, bottom-right. "
+                f"Recommended overlay_radius_scale based on this position: {scale_to_match_real:.3f}"
+            )
+        })
+        
+    except Exception as e:
+        logger.error(f"9-position overlay test failed: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+# Storage for 10-shot validation report
+_validation_shots = []
+
+
+@app.post("/api/validation/10-shot-report")
+async def ten_shot_validation_report(data: dict):
+    """
+    10-shot validation report endpoint.
+    
+    Input options:
+    1. Add a shot: {"action": "add", "real_cm": 50.0}
+    2. Get report: {"action": "report"}
+    3. Clear data: {"action": "clear"}
+    
+    Returns for each shot:
+    - real_cm (ground truth)
+    - measured_cm (system output)
+    - error_cm
+    - error_percent
+    - method_used (trajectory_fit, exit_velocity, v0_robust, physical_only)
+    
+    Plus aggregate:
+    - mean_error_percent
+    - max_error_percent
+    - shots_within_5_percent
+    """
+    global _validation_shots
+    
+    try:
+        sim = get_app_instance()
+        action = data.get("action", "add")
+        
+        if action == "clear":
+            _validation_shots = []
+            return JSONResponse({
+                "success": True,
+                "message": "Validation data cleared",
+                "shots_count": 0
+            })
+        
+        if action == "add":
+            real_cm = data.get("real_cm")
+            if real_cm is None:
+                return JSONResponse({
+                    "success": False,
+                    "error": "real_cm is required for adding a shot"
+                }, status_code=400)
+            
+            state = sim._current_state
+            if not state or not state.shot_result:
+                return JSONResponse({
+                    "success": False,
+                    "error": "No shot recorded. Make a putt first, then add to validation."
+                })
+            
+            result = state.shot_result
+            ppm = result.pixels_per_meter if result.pixels_per_meter > 0 else sim.get_pixels_per_meter()
+            
+            # Get system measurements
+            measured_cm = (result.total_distance_px / ppm) * 100
+            physical_cm = (result.physical_distance_px / ppm) * 100
+            virtual_cm = (result.virtual_distance_px / ppm) * 100
+            speed_m_s = result.initial_speed_px_s / ppm
+            
+            # Get timing stats
+            shot_timing = None
+            if sim.tracker.shot_timing_stats:
+                ts = sim.tracker.shot_timing_stats
+                shot_timing = {
+                    "effective_fps": round(ts.effective_fps, 1),
+                    "dt_mean_ms": round(ts.dt_mean_ms, 2),
+                    "dt_std_ms": round(ts.dt_std_ms, 2),
+                    "frame_count": ts.frame_count
+                }
+            
+            # Calculate errors
+            error_cm = measured_cm - real_cm
+            error_percent = (error_cm / real_cm) * 100 if real_cm > 0 else 0
+            
+            # Determine method used (check tracker state for distance method)
+            # This is a simplified heuristic - ideally we'd track this in the tracker
+            method_used = "unknown"
+            if result.exited_frame:
+                if hasattr(sim.tracker, '_fitted_physics') and sim.tracker._fitted_physics:
+                    method_used = "trajectory_fit"
+                else:
+                    method_used = "exit_velocity"
+            else:
+                method_used = "physical_only"
+            
+            shot_data = {
+                "shot_number": len(_validation_shots) + 1,
+                "real_cm": float(round(real_cm, 1)),
+                "measured_cm": float(round(measured_cm, 1)),
+                "physical_cm": float(round(physical_cm, 1)),
+                "virtual_cm": float(round(virtual_cm, 1)),
+                "error_cm": float(round(error_cm, 2)),
+                "error_percent": float(round(error_percent, 2)),
+                "speed_m_s": float(round(speed_m_s, 3)),
+                "direction_deg": float(round(result.initial_direction_deg, 2)),
+                "exited_frame": bool(result.exited_frame),
+                "method_used": method_used,
+                "timing": shot_timing
+            }
+            
+            _validation_shots.append(shot_data)
+            
+            logger.info(f"VALIDATION SHOT {shot_data['shot_number']}: real={real_cm:.1f}cm, "
+                       f"measured={measured_cm:.1f}cm, error={error_percent:.1f}%")
+            
+            return JSONResponse({
+                "success": True,
+                "shot_added": shot_data,
+                "shots_count": len(_validation_shots),
+                "message": f"Shot {shot_data['shot_number']} added to validation report"
+            })
+        
+        if action == "report":
+            if len(_validation_shots) == 0:
+                return JSONResponse({
+                    "success": False,
+                    "error": "No shots recorded. Add shots first with action='add'."
+                })
+            
+            # Calculate aggregate statistics
+            errors = [s["error_percent"] for s in _validation_shots]
+            abs_errors = [abs(e) for e in errors]
+            
+            mean_error = sum(errors) / len(errors)
+            mean_abs_error = sum(abs_errors) / len(abs_errors)
+            max_abs_error = max(abs_errors)
+            min_error = min(errors)
+            max_error = max(errors)
+            
+            within_2_percent = sum(1 for e in abs_errors if e <= 2.0)
+            within_5_percent = sum(1 for e in abs_errors if e <= 5.0)
+            within_10_percent = sum(1 for e in abs_errors if e <= 10.0)
+            
+            # Check timing consistency
+            timing_consistent = True
+            if all(s.get("timing") for s in _validation_shots):
+                fps_values = [s["timing"]["effective_fps"] for s in _validation_shots]
+                fps_std = float(np.std(fps_values))
+                timing_consistent = bool(fps_std < 5)  # Less than 5 fps variation
+            
+            report = {
+                "success": True,
+                "shots_count": len(_validation_shots),
+                "shots": _validation_shots,
+                "aggregate": {
+                    "mean_error_percent": float(round(mean_error, 2)),
+                    "mean_abs_error_percent": float(round(mean_abs_error, 2)),
+                    "max_abs_error_percent": float(round(max_abs_error, 2)),
+                    "min_error_percent": float(round(min_error, 2)),
+                    "max_error_percent": float(round(max_error, 2)),
+                    "within_2_percent": int(within_2_percent),
+                    "within_5_percent": int(within_5_percent),
+                    "within_10_percent": int(within_10_percent),
+                    "timing_consistent": bool(timing_consistent)
+                },
+                "acceptance_criteria": {
+                    "target_error_percent": 5.0,
+                    "passes": bool(mean_abs_error <= 5.0 and max_abs_error <= 10.0),
+                    "message": (
+                        "PASSED: Mean error <= 5% and max error <= 10%"
+                        if mean_abs_error <= 5.0 and max_abs_error <= 10.0
+                        else f"FAILED: Mean error {mean_abs_error:.1f}% (target <=5%), "
+                             f"max error {max_abs_error:.1f}% (target <=10%)"
+                    )
+                }
+            }
+            
+            return JSONResponse(report)
+        
+        return JSONResponse({
+            "success": False,
+            "error": f"Unknown action: {action}. Use 'add', 'report', or 'clear'."
+        }, status_code=400)
+        
+    except Exception as e:
+        logger.error(f"10-shot validation report failed: {e}")
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
