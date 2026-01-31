@@ -1160,20 +1160,21 @@ class BallTracker:
         robust_v0: Optional[RobustVelocityEstimate]
     ) -> DistanceEstimate:
         """
-        Compute total distance using deterministic fallback strategy.
+        Compute total distance using deterministic fallback strategy with energy consistency checks.
         
-        PRIORITY ORDER (strict):
+        PRIORITY ORDER:
         1. Trajectory physics fit - if passes guardrails
-        2. Exit velocity - PRIMARY fallback when fit rejected
-           total = physical + (v_exit²)/(2a)
-        3. Robust v0 regression - ONLY if exit confidence low/missing
-           AND v0 passes quality gates (R² >= 0.85, frames >= 6, residual <= 3px)
+        2. Exit velocity with energy consistency validation
+           - Check implied deceleration from v0->v_exit
+           - If unrealistic, blend toward v0_robust
+        3. Robust v0 regression - when exit velocity seems unreliable
         4. Physical only - last resort
         
-        SPECIAL CASE: Fast exit correction
-        - For very fast exits (>1500 px/s) with short physical distance (<60cm)
-        - The exit velocity may underestimate due to insufficient tracking time
-        - Blend toward impact_velocity/first_speed if available
+        ENERGY CONSISTENCY CHECK:
+        - If v0_robust is trustworthy and exit_velocity < 0.85 * v0_robust
+        - Calculate implied deceleration: a = (v0² - v_exit²) / (2 * d_physical)
+        - If a > 1.2 m/s² (unrealistic), exit_velocity is underestimating
+        - In this case, blend toward v0_robust or use v0_robust directly
         
         NEVER uses 2-frame v0.
         NEVER allows total < physical.
@@ -1226,8 +1227,44 @@ class BallTracker:
                 details=details
             )
         
-        # === PRIORITY 2: Exit velocity (PRIMARY fallback) ===
-        # Use exit velocity if we have a reasonable measurement
+        # === ENERGY CONSISTENCY CHECK ===
+        # Check if exit velocity is physically consistent with v0_robust
+        # If the ball traveled physical_distance and went from v0 to v_exit,
+        # the implied deceleration should be within realistic bounds
+        energy_consistency_failed = False
+        implied_decel_m_s2 = 0.0
+        v0_exit_ratio = 0.0
+        
+        if (robust_v0 and robust_v0.is_trustworthy() and 
+            exit_velocity and exit_velocity.speed > self.MIN_EXIT_SPEED_PX_S and
+            physical_distance_px > 100):  # Need meaningful distance for calculation
+            
+            v0_exit_ratio = exit_velocity.speed / robust_v0.speed
+            
+            # Calculate implied deceleration: a = (v0² - v_exit²) / (2 * d)
+            v0_px = robust_v0.speed
+            v_exit_px = exit_velocity.speed
+            implied_decel_px_s2 = (v0_px**2 - v_exit_px**2) / (2 * physical_distance_px)
+            implied_decel_m_s2 = implied_decel_px_s2 / ppm
+            
+            details["implied_decel_m_s2"] = implied_decel_m_s2
+            details["v0_exit_ratio"] = v0_exit_ratio
+            
+            # Check for unrealistic deceleration (>1.2 m/s² is way above normal putting green)
+            # Normal putting green is 0.4-0.7 m/s²
+            if implied_decel_m_s2 > 1.2:
+                energy_consistency_failed = True
+                logger.warning(f"Energy consistency FAILED: implied decel={implied_decel_m_s2:.2f} m/s² "
+                             f"(v0={v0_px:.0f}, v_exit={v_exit_px:.0f}, physical={physical_cm:.1f}cm)")
+                details["energy_consistency_failed"] = True
+            elif v0_exit_ratio < 0.75:
+                # Exit velocity is less than 75% of v0 - suspicious even if decel is borderline
+                energy_consistency_failed = True
+                logger.warning(f"Energy consistency FAILED: v_exit/v0 ratio={v0_exit_ratio:.2f} "
+                             f"(v0={v0_px:.0f}, v_exit={v_exit_px:.0f})")
+                details["energy_consistency_failed"] = True
+        
+        # === PRIORITY 2: Exit velocity (with corrections) ===
         exit_confidence = 0.0
         d_total_exit = physical_distance_px  # default
         effective_exit_speed = 0.0
@@ -1235,51 +1272,89 @@ class BallTracker:
         if exit_velocity and exit_velocity.speed > self.MIN_EXIT_SPEED_PX_S:
             effective_exit_speed = exit_velocity.speed
             
-            # FAST EXIT CORRECTION: For very fast exits with short in-frame distance,
-            # the exit velocity may underestimate because the ball hasn't fully 
-            # settled into steady-state deceleration
-            is_fast_exit = exit_velocity.speed > 1500  # >1.3 m/s
-            is_short_physical = physical_cm < 60  # ball exited quickly
-            has_few_points = trajectory_points < 30
+            # CORRECTION CONDITIONS:
+            # 1. Fast exit with few points (original)
+            # 2. Energy consistency failed (new)
+            # 3. Significant v0/exit discrepancy with trustworthy v0 (new)
             
-            if is_fast_exit and is_short_physical and has_few_points:
-                # Check if we have impact_velocity (first_speed) for comparison
+            is_fast_exit = exit_velocity.speed > 1200  # Lowered threshold from 1500
+            is_short_physical = physical_cm < 70  # Increased from 60
+            has_few_points = trajectory_points < 50  # Increased from 30
+            has_v0_discrepancy = (robust_v0 and robust_v0.is_trustworthy() and 
+                                  exit_velocity.speed < robust_v0.speed * 0.85)
+            
+            # Apply correction if any concerning pattern is detected
+            needs_correction = (
+                (is_fast_exit and is_short_physical and has_few_points) or
+                energy_consistency_failed or
+                (has_v0_discrepancy and has_few_points)
+            )
+            
+            if needs_correction:
+                # Determine correction source (impact_velocity or robust_v0)
+                correction_source = None
+                correction_source_name = ""
+                
                 if self._impact_velocity and self._impact_velocity.speed > exit_velocity.speed:
-                    # Ball was faster at impact - apply correction
-                    # Blend exit velocity toward impact velocity based on how quickly ball exited
-                    # Shorter physical distance = more correction needed
-                    correction_factor = min(0.3, (60 - physical_cm) / 100)  # Max 30% correction
-                    velocity_gap = self._impact_velocity.speed - exit_velocity.speed
+                    correction_source = self._impact_velocity.speed
+                    correction_source_name = "impact_velocity"
+                elif robust_v0 and robust_v0.is_trustworthy() and robust_v0.speed > exit_velocity.speed:
+                    correction_source = robust_v0.speed
+                    correction_source_name = "v0_robust"
+                
+                if correction_source:
+                    # Adaptive correction factor based on severity
+                    # IMPORTANT: Cap corrections to avoid over-correction (validated empirically)
+                    if energy_consistency_failed:
+                        # Moderate correction when physics clearly violated
+                        # Cap at 25% to avoid over-correction (was 50%, caused +12% errors)
+                        correction_factor = min(0.25, max(0.10, (implied_decel_m_s2 - 1.0) * 0.2))
+                    elif has_v0_discrepancy:
+                        # Light correction based on discrepancy
+                        # Cap at 20% (was 40%)
+                        discrepancy = 1.0 - v0_exit_ratio
+                        correction_factor = min(0.20, discrepancy * 0.5)
+                    else:
+                        # Original fast-exit correction - also capped lower
+                        correction_factor = min(0.20, (70 - physical_cm) / 150)
+                    
+                    velocity_gap = correction_source - exit_velocity.speed
                     corrected_speed = exit_velocity.speed + (velocity_gap * correction_factor)
                     
-                    # Only apply if correction is meaningful (>5%)
-                    if corrected_speed > effective_exit_speed * 1.05:
-                        logger.info(f"Fast exit correction: {effective_exit_speed:.0f} -> {corrected_speed:.0f} px/s "
-                                   f"(impact={self._impact_velocity.speed:.0f}, factor={correction_factor:.2f})")
+                    # Apply if correction is meaningful (>3%)
+                    if corrected_speed > effective_exit_speed * 1.03:
+                        logger.info(f"Exit velocity correction: {effective_exit_speed:.0f} -> {corrected_speed:.0f} px/s "
+                                   f"(source={correction_source_name}={correction_source:.0f}, factor={correction_factor:.2f}, "
+                                   f"reason={'energy_fail' if energy_consistency_failed else 'v0_discrepancy' if has_v0_discrepancy else 'fast_exit'})")
                         effective_exit_speed = corrected_speed
-                        details["fast_exit_correction_applied"] = True
+                        details["exit_correction_applied"] = True
                         details["original_exit_speed"] = exit_velocity.speed
                         details["corrected_exit_speed"] = corrected_speed
                         details["correction_factor"] = correction_factor
+                        details["correction_source"] = correction_source_name
+                        details["correction_reason"] = "energy_fail" if energy_consistency_failed else "v0_discrepancy" if has_v0_discrepancy else "fast_exit"
             
             virtual_from_exit = (effective_exit_speed ** 2) / (2 * a)
             d_total_exit = physical_distance_px + virtual_from_exit
             
             # Compute exit confidence based on measurement quality
-            # Higher R² from regression = more confident
-            if exit_r_squared > 0.8:
+            if exit_r_squared > 0.95:
+                exit_confidence = 0.90
+            elif exit_r_squared > 0.8:
                 exit_confidence = 0.85
             elif exit_r_squared > 0.6:
                 exit_confidence = 0.7
             elif exit_velocity.speed > self.MIN_EXIT_SPEED_PX_S * 2:
-                # Reasonable speed even if fit quality lower
                 exit_confidence = 0.5
             else:
                 exit_confidence = 0.3
             
-            # Reduce confidence for fast exits with few points (higher uncertainty)
-            if is_fast_exit and has_few_points:
-                exit_confidence *= 0.9  # 10% confidence reduction
+            # Reduce confidence if energy consistency failed (even after correction)
+            if energy_consistency_failed:
+                exit_confidence *= 0.85
+            # Reduce confidence for fast exits with few points
+            elif is_fast_exit and has_few_points:
+                exit_confidence *= 0.9
             
             details["d_total_exit_px"] = d_total_exit
             details["d_total_exit_cm"] = (d_total_exit / ppm) * 100
@@ -1288,16 +1363,19 @@ class BallTracker:
             details["trajectory_points"] = trajectory_points
         
         # === PRIORITY 3: Robust v0 (secondary fallback) ===
-        # Only use if exit confidence is low AND v0 passes strict quality gates
         v0_confidence = 0.0
         d_total_v0 = physical_distance_px  # default
         
         if robust_v0 and robust_v0.speed > 0:
             d_total_v0 = (robust_v0.speed ** 2) / (2 * a)
             
-            # Only trust v0 if it passes ALL quality gates
+            # Trust v0 if it passes quality gates
             if robust_v0.is_trustworthy():
-                v0_confidence = 0.7
+                # Higher confidence if R² is very good
+                if robust_v0.r_squared >= 0.95:
+                    v0_confidence = 0.85
+                else:
+                    v0_confidence = 0.7
             else:
                 v0_confidence = 0.0  # Don't use unreliable v0
             
@@ -1307,8 +1385,34 @@ class BallTracker:
             details["v0_trustworthy"] = robust_v0.is_trustworthy()
         
         # === Decision logic ===
-        # Exit velocity is PRIMARY - use it unless confidence is very low
-        if exit_confidence >= 0.5:
+        # When energy consistency failed and v0 is trustworthy, prefer v0
+        if energy_consistency_failed and v0_confidence >= 0.7 and robust_v0:
+            # Check if v0 estimate is reasonably close to corrected exit estimate
+            # If they're within 15%, use the exit (which was corrected toward v0)
+            # If they differ more, consider blending
+            if abs(d_total_v0 - d_total_exit) / d_total_v0 < 0.15:
+                chosen_total = d_total_exit
+                method = "exit_velocity"
+                confidence = exit_confidence
+                logger.info(f"Distance estimate: EXIT_VELOCITY (corrected) - total={d_total_exit/ppm*100:.1f}cm")
+            else:
+                # IMPORTANT FIX: When implied deceleration is HIGH, v0 is likely inflated
+                # So we should trust EXIT velocity MORE, not v0
+                # Inverted formula: higher implied decel = LESS weight to v0
+                if implied_decel_m_s2 > 1.0:
+                    # Very high implied decel - v0 is probably inflated, trust exit more
+                    blend_weight = max(0.1, 0.4 - (implied_decel_m_s2 - 1.0) * 0.3)
+                else:
+                    # Moderate implied decel - slight blend
+                    blend_weight = min(0.4, max(0.2, 0.5 - implied_decel_m_s2 * 0.2))
+                
+                chosen_total = (1 - blend_weight) * d_total_exit + blend_weight * d_total_v0
+                method = "hybrid_v0_exit"
+                confidence = (exit_confidence + v0_confidence) / 2
+                logger.info(f"Distance estimate: HYBRID - total={chosen_total/ppm*100:.1f}cm "
+                           f"(blend={blend_weight:.2f}, exit={d_total_exit/ppm*100:.1f}, v0={d_total_v0/ppm*100:.1f})")
+                details["blend_weight_v0"] = blend_weight
+        elif exit_confidence >= 0.5:
             # Good exit velocity - use it
             chosen_total = d_total_exit
             method = "exit_velocity"
@@ -1316,35 +1420,29 @@ class BallTracker:
             logger.info(f"Distance estimate: EXIT_VELOCITY - total={d_total_exit/ppm*100:.1f}cm (conf={exit_confidence:.2f})")
         elif exit_confidence > 0 and v0_confidence > 0:
             # Both available but exit is low confidence
-            # Use v0 ONLY if it's trustworthy AND gives reasonable result
             if v0_confidence > exit_confidence and robust_v0 and robust_v0.is_trustworthy():
-                # v0 is more reliable - but sanity check against exit
-                # v0-based total should not be >50% higher than exit-based
+                # v0 is more reliable - sanity check
                 if d_total_v0 <= d_total_exit * 1.5:
                     chosen_total = d_total_v0
                     method = "v0_robust"
                     confidence = v0_confidence
                     logger.info(f"Distance estimate: V0_ROBUST - total={d_total_v0/ppm*100:.1f}cm (exit was low conf)")
                 else:
-                    # v0 seems inflated - fall back to exit
                     chosen_total = d_total_exit
                     method = "exit_velocity"
                     confidence = exit_confidence
                     logger.warning(f"Distance estimate: EXIT_VELOCITY (v0 seemed inflated: {d_total_v0/ppm*100:.1f} vs {d_total_exit/ppm*100:.1f})")
             else:
-                # Exit is still best option despite low confidence
                 chosen_total = d_total_exit
                 method = "exit_velocity"
                 confidence = exit_confidence
                 logger.info(f"Distance estimate: EXIT_VELOCITY (low conf) - total={d_total_exit/ppm*100:.1f}cm")
         elif v0_confidence > 0 and robust_v0 and robust_v0.is_trustworthy():
-            # No exit velocity but have trustworthy v0
             chosen_total = d_total_v0
             method = "v0_robust"
             confidence = v0_confidence
             logger.info(f"Distance estimate: V0_ROBUST (no exit) - total={d_total_v0/ppm*100:.1f}cm")
         else:
-            # No reliable estimates - use physical only
             chosen_total = physical_distance_px
             method = "physical_only"
             confidence = 0.3
@@ -1383,35 +1481,104 @@ class BallTracker:
         if len(self._velocity_history) > 0:
             v0_raw = self._velocity_history[0].speed
         
+        # Get key velocities for comparison
+        impact_v = d.get('impact_velocity_px_s', 0)
+        v0_robust = d.get('v0_robust_px_s', 0)
+        v_exit = d.get('exit_velocity_px_s', 0)
+        effective_exit = d.get('effective_exit_speed', v_exit)
+        
         logger.info("=" * 70)
         logger.info("SHOT VALIDATION REPORT")
         logger.info("=" * 70)
-        logger.info(f"  v0_raw (2-frame):       {v0_raw:.1f} px/s ({v0_raw/ppm:.3f} m/s) [NOT USED]")
-        logger.info(f"  v0_robust (regression): {d.get('v0_robust_px_s', 0):.1f} px/s ({d.get('v0_robust_px_s', 0)/ppm:.3f} m/s)")
-        if d.get('v0_robust_px_s', 0) > 0:
-            logger.info(f"    R²={d.get('v0_robust_r_squared', 0):.3f}, "
-                       f"frames={d.get('v0_robust_frames', 0)}, "
+        
+        # Velocity comparison table
+        logger.info("  VELOCITY COMPARISON (px/s → m/s):")
+        logger.info(f"    impact (first_speed): {impact_v:7.0f} → {impact_v/ppm:.3f} m/s")
+        logger.info(f"    v0_robust:            {v0_robust:7.0f} → {v0_robust/ppm:.3f} m/s  (R²={d.get('v0_robust_r_squared', 0):.3f})")
+        logger.info(f"    v_exit (measured):    {v_exit:7.0f} → {v_exit/ppm:.3f} m/s  (R²={exit_r_squared:.3f})")
+        if effective_exit != v_exit and effective_exit > 0:
+            logger.info(f"    v_exit (corrected):   {effective_exit:7.0f} → {effective_exit/ppm:.3f} m/s")
+        logger.info(f"    v0_raw (2-frame):     {v0_raw:7.0f} → {v0_raw/ppm:.3f} m/s  [NOT USED]")
+        
+        # Velocity ratios (useful for diagnosing issues)
+        if impact_v > 0 and v_exit > 0:
+            logger.info(f"  VELOCITY RATIOS:")
+            logger.info(f"    v_exit/impact:  {v_exit/impact_v:.2f}  (expected ~0.7-0.9 for typical putts)")
+            if v0_robust > 0:
+                logger.info(f"    v_exit/v0:      {v_exit/v0_robust:.2f}  (should be <1.05, ideally 0.8-0.95)")
+                logger.info(f"    v0/impact:      {v0_robust/impact_v:.2f}  (should be ~0.85-1.0)")
+        
+        # V0 quality details
+        if v0_robust > 0:
+            logger.info(f"  V0_ROBUST QUALITY:")
+            logger.info(f"    frames={d.get('v0_robust_frames', 0)}, "
                        f"residual={d.get('v0_robust_residual', 0):.2f}px, "
                        f"trustworthy={d.get('v0_trustworthy', False)}")
-        logger.info(f"  v_exit_weighted:        {d.get('exit_velocity_px_s', 0):.1f} px/s ({d.get('exit_velocity_px_s', 0)/ppm:.3f} m/s)")
-        logger.info(f"    exit_r_squared={exit_r_squared:.3f}, conf={d.get('exit_confidence', 0):.2f}")
         
-        # Log fast exit correction if applied
-        if d.get('fast_exit_correction_applied', False):
-            logger.info(f"  FAST EXIT CORRECTION:   {d.get('original_exit_speed', 0):.0f} -> {d.get('corrected_exit_speed', 0):.0f} px/s (factor={d.get('correction_factor', 0):.2f})")
+        # Energy consistency check results
+        if d.get('implied_decel_m_s2', 0) > 0:
+            impl_decel = d.get('implied_decel_m_s2', 0)
+            logger.info(f"  ENERGY CHECK:")
+            logger.info(f"    implied_decel: {impl_decel:.2f} m/s² (expected 0.4-0.7, max realistic ~1.0)")
+            logger.info(f"    v0/exit_ratio: {d.get('v0_exit_ratio', 0):.2f}")
+            if d.get('energy_consistency_failed', False):
+                logger.warning(f"    ⚠️  ENERGY CONSISTENCY FAILED - exit velocity may underestimate")
         
-        logger.info(f"  impact_velocity:        {d.get('impact_velocity_px_s', 0):.1f} px/s ({d.get('impact_velocity_px_s', 0)/ppm:.3f} m/s)")
-        logger.info(f"  trajectory_points:      {d.get('trajectory_points', 0)}")
+        # Log exit correction if applied
+        if d.get('exit_correction_applied', False):
+            logger.info(f"  EXIT CORRECTION APPLIED:")
+            logger.info(f"    {d.get('original_exit_speed', 0):.0f} → {d.get('corrected_exit_speed', 0):.0f} px/s (+{d.get('correction_factor', 0)*100:.0f}%)")
+            logger.info(f"    source={d.get('correction_source', 'unknown')}, reason={d.get('correction_reason', 'unknown')}")
+        
+        logger.info(f"  trajectory_points: {d.get('trajectory_points', 0)}")
         logger.info("-" * 70)
-        logger.info(f"  trajectory_fit:         {trajectory_fit_status}")
-        logger.info(f"  d_total_v0:             {d.get('d_total_v0_cm', 0):.1f} cm")
-        logger.info(f"  d_total_exit:           {d.get('d_total_exit_cm', 0):.1f} cm")
+        
+        # Distance estimates comparison (what-if analysis)
+        logger.info("  DISTANCE ESTIMATES (cm):")
+        logger.info(f"    trajectory_fit:  {trajectory_fit_status}")
+        physical_cm = d.get('physical_cm', 0)
+        d_v0 = d.get('d_total_v0_cm', 0)
+        d_exit = d.get('d_total_exit_cm', 0)
+        logger.info(f"    d_total_v0:      {d_v0:6.1f} cm  (physical={physical_cm:.1f} + virtual={max(0, d_v0-physical_cm):.1f})")
+        logger.info(f"    d_total_exit:    {d_exit:6.1f} cm  (physical={physical_cm:.1f} + virtual={max(0, d_exit-physical_cm):.1f})")
+        
+        # Blend info if hybrid method used
+        if d.get('blend_weight_v0', 0) > 0:
+            logger.info(f"    blend_weight_v0: {d.get('blend_weight_v0', 0):.2f}")
+        
         logger.info("-" * 70)
-        logger.info(f"  CHOSEN METHOD:          {estimate.method.upper()}")
-        logger.info(f"  PHYSICAL:               {d.get('physical_cm', 0):.1f} cm")
-        logger.info(f"  VIRTUAL:                {d.get('virtual_cm', 0):.1f} cm")
-        logger.info(f"  TOTAL:                  {d.get('chosen_total_cm', 0):.1f} cm")
+        
+        # Method selection reasoning
+        method = estimate.method.upper()
+        logger.info(f"  CHOSEN: {method}")
+        if method == "PHYSICAL_ONLY":
+            # Explain why physical only
+            reasons = []
+            if not d.get('exit_velocity_px_s', 0) or d.get('exit_velocity_px_s', 0) < 100:
+                reasons.append("no/low exit velocity (ball stopped in frame)")
+            if d.get('exit_confidence', 0) < 0.3:
+                reasons.append(f"exit confidence too low ({d.get('exit_confidence', 0):.2f})")
+            if not d.get('v0_trustworthy', False) and d.get('v0_robust_px_s', 0) > 0:
+                reasons.append("v0 not trustworthy")
+            if not reasons:
+                reasons.append("ball stopped within camera view")
+            logger.info(f"    reason: {'; '.join(reasons)}")
+        elif method == "EXIT_VELOCITY":
+            logger.info(f"    confidence: {d.get('exit_confidence', 0):.2f}")
+        elif method == "HYBRID_V0_EXIT":
+            logger.info(f"    blend: {d.get('blend_weight_v0', 0)*100:.0f}% v0 + {(1-d.get('blend_weight_v0', 0))*100:.0f}% exit")
+        
+        logger.info("-" * 70)
+        logger.info(f"  FINAL RESULT:")
+        logger.info(f"    PHYSICAL: {physical_cm:6.1f} cm")
+        logger.info(f"    VIRTUAL:  {d.get('virtual_cm', 0):6.1f} cm")
+        logger.info(f"    TOTAL:    {d.get('chosen_total_cm', 0):6.1f} cm")
         logger.info("=" * 70)
+        
+        # Easy-to-grep summary line for analysis
+        logger.info(f"SHOT_SUMMARY: method={method}, physical={physical_cm:.1f}cm, virtual={d.get('virtual_cm', 0):.1f}cm, "
+                   f"total={d.get('chosen_total_cm', 0):.1f}cm, points={d.get('trajectory_points', 0)}, "
+                   f"impact={impact_v/ppm:.2f}m/s, v0={v0_robust/ppm:.2f}m/s, exit={effective_exit/ppm:.2f}m/s")
     
     def _log_state_timeline_entry(self, timestamp_ns: int, frame_id: int, event: str, details: dict = None):
         """Add an entry to the state timeline for debugging."""
@@ -2007,24 +2174,37 @@ class BallTracker:
         """
         Get deceleration in px/s² using current calibration.
         
-        Optionally applies speed-dependent adjustment:
-        - Very fast balls (>2000 px/s) may have slightly different physics
-          due to initial skidding before pure rolling
-        - This is a minor adjustment (±5%) based on empirical tuning
+        Speed-dependent adjustment based on empirical validation:
+        - Low speed (<1200 px/s): HIGHER decel - rolling resistance dominates
+        - Medium speed (1200-1700 px/s): Moderate increase for slight overcount
+        - High speed (>1700 px/s): LOWER decel - ball maintains momentum better
+        
+        Validated against 15-shot tests showing:
+        - Medium shots overcount by ~5% with flat deceleration
+        - Very fast shots (>2m/s) undercount by ~13% with 0.60 m/s²
         """
         base_decel = self.DECELERATION_M_S2
+        adjustment = 1.0
         
-        # Speed-dependent adjustment for very fast putts
-        # Very fast balls may have higher initial deceleration (skidding)
-        # But this effect diminishes quickly, so we use a small adjustment
-        if speed_px_s is not None and speed_px_s > 2000:
-            # For speeds > 2000 px/s (~1.76 m/s), slightly increase deceleration
-            # This accounts for initial skidding phase
-            speed_factor = min(1.0, (speed_px_s - 2000) / 1000)  # 0-1 scale
-            adjustment = 1.0 + (0.05 * speed_factor)  # Up to 5% increase
-            base_decel *= adjustment
+        if speed_px_s is not None:
+            if speed_px_s < 1200:
+                # Low speed: higher deceleration (up to 15% increase)
+                # Rolling resistance dominates at low speeds
+                speed_factor = max(0, (1200 - speed_px_s) / 400)  # 0-1 scale
+                adjustment = 1.0 + (0.15 * speed_factor)
+            elif speed_px_s < 1700:
+                # Medium speed: moderate increase (up to 10%)
+                # This addresses systematic overcounting for medium exit shots
+                speed_factor = max(0, (1700 - speed_px_s) / 500)  # 0-1 scale
+                adjustment = 1.0 + (0.10 * speed_factor)
+            elif speed_px_s > 1700:
+                # HIGH speed: DECREASE deceleration - ball maintains momentum
+                # Fast balls lose less energy per unit distance
+                # At 1920 px/s (shot 13), needed ~0.50 m/s² vs 0.60 base = -17%
+                speed_factor = min(1.0, (speed_px_s - 1700) / 800)  # 0-1 scale from 1700-2500
+                adjustment = 1.0 - (0.20 * speed_factor)  # Up to 20% decrease
         
-        return base_decel * self._current_pixels_per_meter
+        return base_decel * adjustment * self._current_pixels_per_meter
     
     def set_deceleration_m_s2(self, deceleration: float):
         """Set deceleration in m/s²."""
@@ -2310,13 +2490,13 @@ class BallTracker:
         expected_total_distance_px = distance_estimate.total_px
         expected_virtual_distance_px = distance_estimate.virtual_px
         
-        # Get configured deceleration
-        a = self.get_deceleration_px_s2()
-        a_m_s2 = a / self._current_pixels_per_meter
-        
         # Determine exit speed for virtual ball animation
         # Use exit velocity for animation (consistent with direction)
         robust_exit_speed = exit_vel.speed
+        
+        # Get SPEED-DEPENDENT deceleration for this exit speed
+        a = self.get_deceleration_px_s2(robust_exit_speed)
+        a_m_s2 = a / self._current_pixels_per_meter
         
         # Scale velocity components to match robust exit speed
         if exit_vel.speed > 0:
@@ -2402,8 +2582,9 @@ class BallTracker:
         
         initial_speed = self._exit_state.speed
         
-        # Use configured deceleration (fitted deceleration already incorporated into exit speed)
-        a = self.get_deceleration_px_s2()
+        # Use SPEED-DEPENDENT deceleration based on exit velocity
+        # This is the key fix: faster balls need less deceleration, slower balls need more
+        a = self.get_deceleration_px_s2(initial_speed)
         
         # Time when ball stops
         t_stop = initial_speed / a if a > 0 else 0
