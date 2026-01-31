@@ -1170,17 +1170,36 @@ class BallTracker:
            AND v0 passes quality gates (R² >= 0.85, frames >= 6, residual <= 3px)
         4. Physical only - last resort
         
+        SPECIAL CASE: Fast exit correction
+        - For very fast exits (>1500 px/s) with short physical distance (<60cm)
+        - The exit velocity may underestimate due to insufficient tracking time
+        - Blend toward impact_velocity/first_speed if available
+        
         NEVER uses 2-frame v0.
         NEVER allows total < physical.
         """
-        a = self.get_deceleration_px_s2()
+        # Get speed for deceleration calculation (use exit or v0)
+        ref_speed = 0.0
+        if exit_velocity and exit_velocity.speed > 0:
+            ref_speed = exit_velocity.speed
+        elif robust_v0 and robust_v0.speed > 0:
+            ref_speed = robust_v0.speed
+            
+        a = self.get_deceleration_px_s2(speed_px_s=ref_speed)
         ppm = self._current_pixels_per_meter
         
+        # Get trajectory point count for quality assessment
+        trajectory_points = len(self._raw_trajectory)
+        physical_cm = (physical_distance_px / ppm) * 100
+        
         # Prepare diagnostic details
+        a_m_s2 = a / ppm
         details = {
             "physical_px": physical_distance_px,
-            "physical_cm": (physical_distance_px / ppm) * 100,
+            "physical_cm": physical_cm,
             "deceleration_px_s2": a,
+            "deceleration_m_s2": a_m_s2,
+            "trajectory_points": trajectory_points,
             "trajectory_fit_passed": trajectory_fit_result is not None,
             "exit_velocity_px_s": exit_velocity.speed if exit_velocity else 0,
             "exit_r_squared": exit_r_squared,
@@ -1188,6 +1207,7 @@ class BallTracker:
             "v0_robust_r_squared": robust_v0.r_squared if robust_v0 else 0,
             "v0_robust_frames": robust_v0.num_frames if robust_v0 else 0,
             "v0_robust_residual": robust_v0.residual_mean if robust_v0 else 0,
+            "impact_velocity_px_s": self._impact_velocity.speed if self._impact_velocity else 0,
         }
         
         # === PRIORITY 1: Trajectory fit (best when it works) ===
@@ -1210,9 +1230,39 @@ class BallTracker:
         # Use exit velocity if we have a reasonable measurement
         exit_confidence = 0.0
         d_total_exit = physical_distance_px  # default
+        effective_exit_speed = 0.0
         
         if exit_velocity and exit_velocity.speed > self.MIN_EXIT_SPEED_PX_S:
-            virtual_from_exit = (exit_velocity.speed ** 2) / (2 * a)
+            effective_exit_speed = exit_velocity.speed
+            
+            # FAST EXIT CORRECTION: For very fast exits with short in-frame distance,
+            # the exit velocity may underestimate because the ball hasn't fully 
+            # settled into steady-state deceleration
+            is_fast_exit = exit_velocity.speed > 1500  # >1.3 m/s
+            is_short_physical = physical_cm < 60  # ball exited quickly
+            has_few_points = trajectory_points < 30
+            
+            if is_fast_exit and is_short_physical and has_few_points:
+                # Check if we have impact_velocity (first_speed) for comparison
+                if self._impact_velocity and self._impact_velocity.speed > exit_velocity.speed:
+                    # Ball was faster at impact - apply correction
+                    # Blend exit velocity toward impact velocity based on how quickly ball exited
+                    # Shorter physical distance = more correction needed
+                    correction_factor = min(0.3, (60 - physical_cm) / 100)  # Max 30% correction
+                    velocity_gap = self._impact_velocity.speed - exit_velocity.speed
+                    corrected_speed = exit_velocity.speed + (velocity_gap * correction_factor)
+                    
+                    # Only apply if correction is meaningful (>5%)
+                    if corrected_speed > effective_exit_speed * 1.05:
+                        logger.info(f"Fast exit correction: {effective_exit_speed:.0f} -> {corrected_speed:.0f} px/s "
+                                   f"(impact={self._impact_velocity.speed:.0f}, factor={correction_factor:.2f})")
+                        effective_exit_speed = corrected_speed
+                        details["fast_exit_correction_applied"] = True
+                        details["original_exit_speed"] = exit_velocity.speed
+                        details["corrected_exit_speed"] = corrected_speed
+                        details["correction_factor"] = correction_factor
+            
+            virtual_from_exit = (effective_exit_speed ** 2) / (2 * a)
             d_total_exit = physical_distance_px + virtual_from_exit
             
             # Compute exit confidence based on measurement quality
@@ -1227,9 +1277,15 @@ class BallTracker:
             else:
                 exit_confidence = 0.3
             
+            # Reduce confidence for fast exits with few points (higher uncertainty)
+            if is_fast_exit and has_few_points:
+                exit_confidence *= 0.9  # 10% confidence reduction
+            
             details["d_total_exit_px"] = d_total_exit
             details["d_total_exit_cm"] = (d_total_exit / ppm) * 100
             details["exit_confidence"] = exit_confidence
+            details["effective_exit_speed"] = effective_exit_speed
+            details["trajectory_points"] = trajectory_points
         
         # === PRIORITY 3: Robust v0 (secondary fallback) ===
         # Only use if exit confidence is low AND v0 passes strict quality gates
@@ -1339,6 +1395,13 @@ class BallTracker:
                        f"trustworthy={d.get('v0_trustworthy', False)}")
         logger.info(f"  v_exit_weighted:        {d.get('exit_velocity_px_s', 0):.1f} px/s ({d.get('exit_velocity_px_s', 0)/ppm:.3f} m/s)")
         logger.info(f"    exit_r_squared={exit_r_squared:.3f}, conf={d.get('exit_confidence', 0):.2f}")
+        
+        # Log fast exit correction if applied
+        if d.get('fast_exit_correction_applied', False):
+            logger.info(f"  FAST EXIT CORRECTION:   {d.get('original_exit_speed', 0):.0f} -> {d.get('corrected_exit_speed', 0):.0f} px/s (factor={d.get('correction_factor', 0):.2f})")
+        
+        logger.info(f"  impact_velocity:        {d.get('impact_velocity_px_s', 0):.1f} px/s ({d.get('impact_velocity_px_s', 0)/ppm:.3f} m/s)")
+        logger.info(f"  trajectory_points:      {d.get('trajectory_points', 0)}")
         logger.info("-" * 70)
         logger.info(f"  trajectory_fit:         {trajectory_fit_status}")
         logger.info(f"  d_total_v0:             {d.get('d_total_v0_cm', 0):.1f} cm")
@@ -1940,11 +2003,28 @@ class BallTracker:
         """
         self._current_pixels_per_meter = pixels_per_meter
     
-    def get_deceleration_px_s2(self) -> float:
+    def get_deceleration_px_s2(self, speed_px_s: Optional[float] = None) -> float:
         """
         Get deceleration in px/s² using current calibration.
+        
+        Optionally applies speed-dependent adjustment:
+        - Very fast balls (>2000 px/s) may have slightly different physics
+          due to initial skidding before pure rolling
+        - This is a minor adjustment (±5%) based on empirical tuning
         """
-        return self.DECELERATION_M_S2 * self._current_pixels_per_meter
+        base_decel = self.DECELERATION_M_S2
+        
+        # Speed-dependent adjustment for very fast putts
+        # Very fast balls may have higher initial deceleration (skidding)
+        # But this effect diminishes quickly, so we use a small adjustment
+        if speed_px_s is not None and speed_px_s > 2000:
+            # For speeds > 2000 px/s (~1.76 m/s), slightly increase deceleration
+            # This accounts for initial skidding phase
+            speed_factor = min(1.0, (speed_px_s - 2000) / 1000)  # 0-1 scale
+            adjustment = 1.0 + (0.05 * speed_factor)  # Up to 5% increase
+            base_decel *= adjustment
+        
+        return base_decel * self._current_pixels_per_meter
     
     def set_deceleration_m_s2(self, deceleration: float):
         """Set deceleration in m/s²."""
