@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+@theme {
+  --color-sl-dark: #0f172a;    /* Slate 900 */
+  --color-sl-panel: rgba(30, 41, 59, 0.8); /* Slate 800 with opacity */
+  --color-sl-green: #22c55e;   /* Green 500 */
+  --color-sl-neon: #4ade80;    /* Green 400 */
+  --color-sl-cyan: #06b6d4;    /* Cyan 500 */
+  --color-sl-accent: #f59e0b;  /* Amber 500 */
+
+  --font-sans: Inter, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+@layer base {
+  body {
+    @apply bg-sl-dark text-white font-sans antialiased overflow-hidden;
+  }
+}
