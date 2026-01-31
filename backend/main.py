@@ -1048,6 +1048,30 @@ async def get_diagnostics():
         sim = get_app_instance()
         state = sim._current_state
         
+        # Get camera timing stats
+        camera_fps_stats = None
+        if sim.camera:
+            stats = sim.camera.fps_stats
+            camera_fps_stats = {
+                "effective_fps": round(stats.fps, 1),
+                "reported_fps": round(sim.camera.reported_fps, 1),
+                "dt_mean_ms": round(stats.dt_mean_ms, 2),
+                "dt_std_ms": round(stats.dt_std_ms, 2),
+                "dt_min_ms": round(stats.dt_min_ms, 2),
+                "dt_max_ms": round(stats.dt_max_ms, 2)
+            }
+        
+        # Get shot timing stats from tracker
+        shot_timing = None
+        if sim.tracker.shot_timing_stats:
+            ts = sim.tracker.shot_timing_stats
+            shot_timing = {
+                "effective_fps": round(ts.effective_fps, 1),
+                "dt_mean_ms": round(ts.dt_mean_ms, 2),
+                "dt_std_ms": round(ts.dt_std_ms, 2),
+                "frame_count": ts.frame_count
+            }
+        
         # Build diagnostic report
         diagnostics = {
             "calibration": {
@@ -1064,7 +1088,12 @@ async def get_diagnostics():
                 "forward_direction_deg": round(sim.tracker._forward_direction_deg, 1),
                 "valid_motion_angle_deg": round(sim.tracker._valid_motion_angle_deg, 1),
                 "deceleration_m_s2": round(sim.tracker.DECELERATION_M_S2, 3),
-                "deceleration_px_s2": round(sim.tracker.get_deceleration_px_s2(), 1)
+                "deceleration_px_s2": round(sim.tracker.get_deceleration_px_s2(), 1),
+                "effective_fps": round(sim.tracker.effective_fps, 1)
+            },
+            "timing": {
+                "camera": camera_fps_stats,
+                "last_shot": shot_timing
             },
             "last_shot": None,
             "system": {
@@ -1080,17 +1109,17 @@ async def get_diagnostics():
             ppm = sim.get_pixels_per_meter()
             
             diagnostics["last_shot"] = {
-                "initial_speed_px_s": round(result.initial_speed_px_s, 1),
-                "initial_speed_m_s": round(result.initial_speed_px_s / ppm, 3),
-                "direction_deg": round(result.initial_direction_deg, 2),
-                "physical_distance_px": round(result.total_distance_px - result.virtual_distance_px, 1),
-                "virtual_distance_px": round(result.virtual_distance_px, 1),
-                "total_distance_px": round(result.total_distance_px, 1),
-                "total_distance_m": round(result.total_distance_px / ppm, 4),
-                "total_distance_cm": round((result.total_distance_px / ppm) * 100, 1),
-                "exited_frame": result.exited_frame,
-                "duration_ms": round(result.duration_ms, 1),
-                "trajectory_points": len(result.trajectory)
+                "initial_speed_px_s": float(round(result.initial_speed_px_s, 1)),
+                "initial_speed_m_s": float(round(result.initial_speed_px_s / ppm, 3)),
+                "direction_deg": float(round(result.initial_direction_deg, 2)),
+                "physical_distance_px": float(round(result.total_distance_px - result.virtual_distance_px, 1)),
+                "virtual_distance_px": float(round(result.virtual_distance_px, 1)),
+                "total_distance_px": float(round(result.total_distance_px, 1)),
+                "total_distance_m": float(round(result.total_distance_px / ppm, 4)),
+                "total_distance_cm": float(round((result.total_distance_px / ppm) * 100, 1)),
+                "exited_frame": bool(result.exited_frame),
+                "duration_ms": float(round(result.duration_ms, 1)),
+                "trajectory_points": int(len(result.trajectory))
             }
         
         return JSONResponse(diagnostics)
@@ -1098,6 +1127,179 @@ async def get_diagnostics():
     except Exception as e:
         logger.error(f"Diagnostics failed: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/validation/report-shot")
+async def report_validation_shot(data: dict):
+    """
+    Report a shot for validation purposes.
+    
+    Call this after each shot to record the ground truth distance for later analysis.
+    
+    Expected data:
+    {
+        "actual_distance_cm": float,  # Measured with ruler
+        "notes": str                   # Optional notes
+    }
+    
+    Returns comparison between system and ground truth.
+    """
+    try:
+        sim = get_app_instance()
+        state = sim._current_state
+        
+        actual_cm = data.get("actual_distance_cm")
+        notes = data.get("notes", "")
+        
+        if actual_cm is None:
+            return JSONResponse({
+                "success": False,
+                "error": "actual_distance_cm is required"
+            }, status_code=400)
+        
+        if not state or not state.shot_result:
+            return JSONResponse({
+                "success": False,
+                "error": "No shot recorded. Make a putt first."
+            })
+        
+        result = state.shot_result
+        ppm = result.pixels_per_meter if result.pixels_per_meter > 0 else sim.get_pixels_per_meter()
+        
+        # Get system measurements
+        system_cm = (result.total_distance_px / ppm) * 100
+        speed_m_s = result.initial_speed_px_s / ppm
+        
+        # Calculate errors
+        error_cm = system_cm - actual_cm
+        error_percent = (error_cm / actual_cm) * 100 if actual_cm > 0 else 0
+        
+        # Get timing stats
+        shot_timing = None
+        if sim.tracker.shot_timing_stats:
+            ts = sim.tracker.shot_timing_stats
+            shot_timing = {
+                "effective_fps": round(ts.effective_fps, 1),
+                "dt_mean_ms": round(ts.dt_mean_ms, 2),
+                "frame_count": ts.frame_count
+            }
+        
+        report = {
+            "success": True,
+            "ground_truth": {
+                "actual_distance_cm": float(round(actual_cm, 1)),
+                "notes": notes
+            },
+            "system_measurement": {
+                "distance_cm": float(round(system_cm, 1)),
+                "speed_m_s": float(round(speed_m_s, 3)),
+                "direction_deg": float(round(result.initial_direction_deg, 2)),
+                "physical_distance_cm": float(round((result.physical_distance_px / ppm) * 100, 1)),
+                "virtual_distance_cm": float(round((result.virtual_distance_px / ppm) * 100, 1)),
+                "exited_frame": bool(result.exited_frame),
+                "pixels_per_meter": float(round(ppm, 1))
+            },
+            "error": {
+                "error_cm": float(round(error_cm, 2)),
+                "error_percent": float(round(error_percent, 2)),
+                "within_2_percent": bool(abs(error_percent) <= 2.0),
+                "within_5_percent": bool(abs(error_percent) <= 5.0)
+            },
+            "timing": shot_timing
+        }
+        
+        # Log for later analysis
+        logger.info(f"VALIDATION SHOT: actual={actual_cm:.1f}cm, system={system_cm:.1f}cm, "
+                   f"error={error_cm:.1f}cm ({error_percent:.1f}%), exited={result.exited_frame}, "
+                   f"speed={speed_m_s:.2f}m/s, notes='{notes}'")
+        
+        return JSONResponse(report)
+        
+    except Exception as e:
+        logger.error(f"Validation report failed: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@app.get("/api/calibration/static-ball-test")
+async def static_ball_test():
+    """
+    Static ball test for calibration validation.
+    
+    Place the ball at a known position and call this endpoint to verify:
+    - Detected radius vs expected radius
+    - Pixels per meter calculation
+    - Detection confidence
+    
+    Call this at 9 positions (center + 8 edges) for comprehensive testing.
+    """
+    try:
+        sim = get_app_instance()
+        state = sim._current_state
+        
+        if not state or state.ball_x is None:
+            return JSONResponse({
+                "success": False,
+                "error": "No ball detected. Place ball in frame."
+            })
+        
+        # Get current detection info
+        ball_x = state.ball_x
+        ball_y = state.ball_y
+        ball_radius = state.ball_radius
+        confidence = state.ball_confidence
+        
+        # Calculate expected values
+        ppm = sim.get_pixels_per_meter()
+        expected_radius = (0.04267 / 2) * ppm  # Ball diameter 42.67mm
+        
+        # Calculate radius error
+        radius_error_px = ball_radius - expected_radius if ball_radius else 0
+        radius_error_percent = (radius_error_px / expected_radius) * 100 if expected_radius > 0 else 0
+        
+        # Determine position in frame
+        frame_w, frame_h = sim.camera.resolution if sim.camera else (1280, 800)
+        position_name = "center"
+        if ball_x < frame_w * 0.33:
+            position_name = "left"
+        elif ball_x > frame_w * 0.67:
+            position_name = "right"
+        if ball_y < frame_h * 0.33:
+            position_name = "top-" + position_name if position_name != "center" else "top"
+        elif ball_y > frame_h * 0.67:
+            position_name = "bottom-" + position_name if position_name != "center" else "bottom"
+        
+        return JSONResponse({
+            "success": True,
+            "position": {
+                "x_px": round(ball_x, 1),
+                "y_px": round(ball_y, 1),
+                "position_name": position_name
+            },
+            "radius": {
+                "detected_px": round(ball_radius, 2) if ball_radius else None,
+                "expected_px": round(expected_radius, 2),
+                "error_px": round(radius_error_px, 2),
+                "error_percent": round(radius_error_percent, 2)
+            },
+            "confidence": round(confidence, 3) if confidence else None,
+            "calibration": {
+                "pixels_per_meter": round(ppm, 1),
+                "auto_calibrated": sim.auto_calibrator.is_calibrated,
+                "lens_calibrated": sim._lens_calibrated
+            },
+            "overlay_recommendation": {
+                "scale_factor": round(ball_radius / expected_radius, 3) if ball_radius and expected_radius > 0 else 1.0,
+                "message": (
+                    "Overlay matches ball size" if abs(radius_error_percent) < 5
+                    else f"Overlay is {'smaller' if radius_error_percent < 0 else 'larger'} than ball - "
+                         f"consider {'increasing' if radius_error_percent < 0 else 'decreasing'} overlay radius by {abs(radius_error_percent):.1f}%"
+                )
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Static ball test failed: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @app.get("/api/calibrate/detect-aruco")

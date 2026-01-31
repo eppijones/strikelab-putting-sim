@@ -8,8 +8,9 @@ import numpy as np
 import time
 import logging
 from typing import Optional, Tuple, Generator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
+from collections import deque
 
 logger = logging.getLogger(__name__)
 
@@ -32,27 +33,72 @@ class FrameData:
         return self.timestamp_ns / 1_000_000
 
 
+@dataclass
+class FPSStats:
+    """Frame timing statistics."""
+    fps: float = 0.0
+    dt_mean_ms: float = 0.0
+    dt_std_ms: float = 0.0
+    dt_min_ms: float = 0.0
+    dt_max_ms: float = 0.0
+    sample_count: int = 0
+
+
 class FPSTracker:
     """Track actual FPS using timestamp deltas."""
     
     def __init__(self, window_size: int = 30):
         self.window_size = window_size
-        self.timestamps: list[int] = []
+        self.timestamps: deque[int] = deque(maxlen=window_size)
+        self._last_fps = 0.0
         
     def update(self, timestamp_ns: int) -> float:
         """Update with new timestamp, return current FPS estimate."""
         self.timestamps.append(timestamp_ns)
-        if len(self.timestamps) > self.window_size:
-            self.timestamps.pop(0)
         
         if len(self.timestamps) < 2:
             return 0.0
             
         dt_ns = self.timestamps[-1] - self.timestamps[0]
         if dt_ns <= 0:
-            return 0.0
+            return self._last_fps
             
-        return (len(self.timestamps) - 1) / (dt_ns / 1e9)
+        fps = (len(self.timestamps) - 1) / (dt_ns / 1e9)
+        self._last_fps = fps
+        return fps
+    
+    def get_stats(self) -> FPSStats:
+        """Get detailed timing statistics."""
+        if len(self.timestamps) < 2:
+            return FPSStats()
+        
+        # Calculate dt between consecutive frames
+        timestamps = list(self.timestamps)
+        dts_ms = []
+        for i in range(1, len(timestamps)):
+            dt_ms = (timestamps[i] - timestamps[i-1]) / 1e6
+            if dt_ms > 0:
+                dts_ms.append(dt_ms)
+        
+        if not dts_ms:
+            return FPSStats()
+        
+        dts = np.array(dts_ms)
+        fps = 1000.0 / np.mean(dts) if np.mean(dts) > 0 else 0
+        
+        return FPSStats(
+            fps=fps,
+            dt_mean_ms=float(np.mean(dts)),
+            dt_std_ms=float(np.std(dts)),
+            dt_min_ms=float(np.min(dts)),
+            dt_max_ms=float(np.max(dts)),
+            sample_count=len(dts)
+        )
+    
+    @property
+    def current_fps(self) -> float:
+        """Get current FPS estimate."""
+        return self._last_fps
 
 
 class Camera:
@@ -90,6 +136,13 @@ class Camera:
         # For replay mode: track video FPS for proper timing
         self._replay_fps = 120.0
         self._replay_frame_duration_ns = int(1e9 / 120)
+        
+        # Actual camera FPS (as reported by driver)
+        self._reported_fps: float = 120.0
+        
+        # Log FPS stats periodically
+        self._last_fps_log_time = 0.0
+        self._fps_log_interval = 10.0  # Log every 10 seconds
         
     def start(self) -> bool:
         """Initialize and start camera capture."""
@@ -133,10 +186,13 @@ class Camera:
         actual_h = self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
         actual_fps = self._cap.get(cv2.CAP_PROP_FPS)
         
+        self._reported_fps = actual_fps if actual_fps > 0 else 120.0
+        
         logger.info(f"Camera configured: {actual_w}x{actual_h} @ {actual_fps}fps")
         
         if actual_fps < 100:
-            logger.warning(f"Camera FPS ({actual_fps}) lower than expected 120fps")
+            logger.warning(f"Camera FPS ({actual_fps}) lower than expected 120fps - "
+                          f"velocity calculations will use actual timestamps")
         
         self._running = True
         self._frame_id = 0
@@ -158,6 +214,7 @@ class Camera:
         # Get video properties
         self._replay_fps = self._cap.get(cv2.CAP_PROP_FPS) or 120.0
         self._replay_frame_duration_ns = int(1e9 / self._replay_fps)
+        self._reported_fps = self._replay_fps
         
         width = self._cap.get(cv2.CAP_PROP_FRAME_WIDTH)
         height = self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
@@ -181,6 +238,8 @@ class Camera:
         # Set reasonable resolution
         self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        
+        self._reported_fps = self._cap.get(cv2.CAP_PROP_FPS) or 30.0
         
         self._running = True
         self._frame_id = 0
@@ -222,6 +281,16 @@ class Camera:
         # Update FPS tracker
         self._fps_tracker.update(timestamp_ns)
         
+        # Log FPS stats periodically
+        now = time.time()
+        if now - self._last_fps_log_time > self._fps_log_interval:
+            self._last_fps_log_time = now
+            stats = self._fps_tracker.get_stats()
+            if stats.sample_count > 0:
+                logger.debug(f"Camera timing: effective_fps={stats.fps:.1f}, "
+                           f"dt={stats.dt_mean_ms:.2f}±{stats.dt_std_ms:.2f}ms, "
+                           f"range=[{stats.dt_min_ms:.2f}, {stats.dt_max_ms:.2f}]ms")
+        
         return FrameData(
             frame=frame,
             timestamp_ns=timestamp_ns,
@@ -238,8 +307,18 @@ class Camera:
     
     @property
     def fps(self) -> float:
-        """Get current measured FPS."""
-        return self._fps_tracker.update(time.time_ns()) if self._running else 0.0
+        """Get current measured FPS (from actual timestamps)."""
+        return self._fps_tracker.current_fps
+    
+    @property
+    def reported_fps(self) -> float:
+        """Get FPS as reported by camera driver."""
+        return self._reported_fps
+    
+    @property
+    def fps_stats(self) -> FPSStats:
+        """Get detailed FPS statistics."""
+        return self._fps_tracker.get_stats()
     
     @property
     def is_running(self) -> bool:

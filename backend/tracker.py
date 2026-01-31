@@ -203,6 +203,17 @@ class TrackerState:
     exit_state: Optional[ExitState] = None  # State when ball exited frame
 
 
+@dataclass 
+class FrameTimingStats:
+    """Statistics about frame timing during a shot."""
+    effective_fps: float = 0.0
+    dt_mean_ms: float = 0.0
+    dt_std_ms: float = 0.0
+    dt_min_ms: float = 0.0
+    dt_max_ms: float = 0.0
+    frame_count: int = 0
+
+
 class BallTracker:
     """
     Two-lane ball tracker with shot state machine.
@@ -277,8 +288,17 @@ class BallTracker:
     MIN_VIRTUAL_SPEED_PX_S = 20     # Stop virtual rolling below this speed
     MAX_VIRTUAL_TIME_S = 10.0       # Maximum virtual rolling time (safety limit)
     
+    # Ball validation for motion trigger
+    MIN_BALL_RADIUS_PX = 12         # Minimum ball radius for valid detection
+    MAX_BALL_RADIUS_PX = 50         # Maximum ball radius
+    MIN_CIRCULARITY = 0.80          # Minimum circularity to be considered a ball
+    BALL_STABLE_FRAMES = 3          # Frames ball must be stable before triggering
+    
     # Current calibration for pixel/meter conversion
     _current_pixels_per_meter: float = 1150.0  # Updated by set_calibration()
+    
+    # Effective FPS (from actual frame timestamps)
+    _effective_fps: float = 100.0   # Updated from actual frame timing
     
     def __init__(
         self, 
@@ -334,15 +354,23 @@ class BallTracker:
         
         # Trajectory recording
         self._trajectory: deque[TrackPoint] = deque(maxlen=1000)
-        self._raw_trajectory: deque[TrackPoint] = deque(maxlen=20)  # Raw positions for velocity
+        self._raw_trajectory: deque[TrackPoint] = deque(maxlen=100)  # Raw positions for velocity & physics fitting
         self._motion_start_frame: int = 0
         self._first_speed_frame: int = 0
+        
+        # Frame timing tracking for accurate dt calculation
+        self._frame_timestamps: deque[int] = deque(maxlen=120)  # Last ~1 second of timestamps
+        self._shot_timestamps: List[int] = []  # Timestamps during current shot
         
         # Motion detection
         self._motion_trigger_count = 0
         self._stopped_count = 0
         self._cooldown_start_ns: int = 0
         self._settling_countdown: int = 0  # Frames to wait before motion detection
+        
+        # Ball validation for trigger
+        self._ball_stable_count: int = 0  # Consecutive frames with valid ball detection
+        self._last_ball_check_radius: float = 0.0
         
         # Background model for motion detection
         self._background = BackgroundModel(learning_rate=self.BG_LEARNING_RATE)
@@ -378,6 +406,17 @@ class BallTracker:
         self._last_valid_position: Optional[Tuple[float, float]] = None
         self._last_valid_velocity: Optional[Velocity] = None
         
+        # Fitted physics for more accurate virtual rolling
+        self._fitted_deceleration: Optional[float] = None  # px/s² from trajectory fit
+        self._fitted_physics: Optional[Tuple[float, float, float]] = None  # (v0, a, total_dist)
+        
+        # Expected distances calculated from initial velocity (more reliable than exit velocity)
+        self._expected_total_distance_px: float = 0.0
+        self._expected_virtual_distance_px: float = 0.0
+        
+        # Shot timing stats
+        self._shot_timing_stats: Optional[FrameTimingStats] = None
+        
     def update(
         self, 
         detection: Optional[Detection], 
@@ -397,6 +436,14 @@ class BallTracker:
         Returns:
             Current tracker state
         """
+        # Track frame timestamps for FPS calculation
+        self._frame_timestamps.append(timestamp_ns)
+        self._update_effective_fps()
+        
+        # Track timestamps during shot
+        if self._state in (ShotState.TRACKING, ShotState.VIRTUAL_ROLLING):
+            self._shot_timestamps.append(timestamp_ns)
+        
         # Update frame bounds from frame if available
         if frame is not None:
             h, w = frame.shape[:2]
@@ -455,6 +502,25 @@ class BallTracker:
         
         return self._build_state()
     
+    def _update_effective_fps(self):
+        """Update effective FPS from actual frame timestamps."""
+        if len(self._frame_timestamps) < 10:
+            return
+        
+        timestamps = list(self._frame_timestamps)
+        dt_ns = timestamps[-1] - timestamps[0]
+        if dt_ns > 0:
+            self._effective_fps = (len(timestamps) - 1) / (dt_ns / 1e9)
+    
+    def _get_dt_from_timestamps(self, t1_ns: int, t2_ns: int) -> float:
+        """Get time delta in seconds from two timestamps."""
+        dt_ns = t2_ns - t1_ns
+        return dt_ns / 1e9 if dt_ns > 0 else (1.0 / self._effective_fps)
+    
+    def _get_expected_frame_dt(self) -> float:
+        """Get expected dt for one frame based on effective FPS."""
+        return 1.0 / max(self._effective_fps, 30.0)
+    
     def _validate_detection(self, detection: Detection) -> bool:
         """Validate detection to prevent false shots."""
         # Confidence check
@@ -473,6 +539,33 @@ class BallTracker:
         self._last_radius = detection.radius
         self._last_confidence = detection.confidence
         return True
+    
+    def _validate_ball_signature(self, detection: Detection) -> bool:
+        """
+        Validate that detection matches ball signature (not putter/hand).
+        
+        Returns True if detection looks like a golf ball.
+        """
+        # Radius check
+        if detection.radius < self.MIN_BALL_RADIUS_PX or detection.radius > self.MAX_BALL_RADIUS_PX:
+            return False
+        
+        # Confidence check (stricter for trigger)
+        if detection.confidence < 0.85:
+            return False
+        
+        # Radius stability check
+        if self._last_ball_check_radius > 0:
+            ratio = detection.radius / self._last_ball_check_radius
+            if ratio < 0.7 or ratio > 1.3:
+                self._ball_stable_count = 0
+                self._last_ball_check_radius = detection.radius
+                return False
+        
+        self._last_ball_check_radius = detection.radius
+        self._ball_stable_count += 1
+        
+        return self._ball_stable_count >= self.BALL_STABLE_FRAMES
     
     def _update_idle_lane(self, detection: Detection, timestamp_ns: int, frame_id: int):
         """
@@ -507,6 +600,7 @@ class BallTracker:
                 self._idle_stability_count = 0
                 self._settling_countdown = self.SETTLING_FRAMES  # Start settling period
                 self._background.reset()  # Reset background for new ball position
+                self._ball_stable_count = 0  # Reset ball validation
                 return
             
             # EMA smoothing
@@ -569,8 +663,9 @@ class BallTracker:
             dy = new_pos[1] - self._current_pos[1]
             jump_dist = np.sqrt(dx**2 + dy**2)
             
-            # Expected movement based on velocity and frame time (assume ~120fps)
-            expected_move = self._velocity.speed / 120
+            # Expected movement based on velocity and ACTUAL frame time
+            expected_dt = self._get_expected_frame_dt()
+            expected_move = self._velocity.speed * expected_dt
             
             # If jump is way larger than expected, this might be noise
             if jump_dist > expected_move * 5 and jump_dist > 50:
@@ -652,7 +747,7 @@ class BallTracker:
     
     def _compute_velocity_fast(self):
         """
-        Compute velocity from raw trajectory points.
+        Compute velocity from raw trajectory points using actual timestamps.
         Uses smaller window for faster initial response.
         """
         if len(self._raw_trajectory) < 2:
@@ -667,11 +762,11 @@ class BallTracker:
         if len(points) < 2:
             return
         
-        # Simple two-point velocity for maximum responsiveness
+        # Use actual timestamps for velocity calculation
         p1 = points[0]
         p2 = points[-1]
         
-        dt_s = (p2.timestamp_ns - p1.timestamp_ns) / 1e9
+        dt_s = self._get_dt_from_timestamps(p1.timestamp_ns, p2.timestamp_ns)
         if dt_s <= 0:
             return
         
@@ -694,7 +789,7 @@ class BallTracker:
         p1 = points[0]
         p2 = points[-1]
         
-        dt_s = (p2.timestamp_ns - p1.timestamp_ns) / 1e9
+        dt_s = self._get_dt_from_timestamps(p1.timestamp_ns, p2.timestamp_ns)
         if dt_s <= 0:
             return
         
@@ -704,18 +799,139 @@ class BallTracker:
         self._velocity = Velocity(vx=vx, vy=vy)
         self._velocity_history.append(self._velocity)
     
-    def _compute_exit_velocity(self) -> Optional[Velocity]:
+    def _compute_exit_velocity_regression(self) -> Optional[Tuple[Velocity, float]]:
         """
-        Compute exit velocity using weighted average of recent frames.
+        Compute exit velocity using linear regression on x(t), y(t).
         
-        Uses exponential weighting so more recent frames have higher influence.
-        This provides a smoother, more accurate velocity estimate at frame exit.
+        More robust than weighted average - fits a line to positions vs time
+        and uses the slope as velocity. Includes outlier rejection.
         
         Returns:
-            Velocity object with weighted average vx, vy, or None if insufficient data
+            (Velocity, r_squared) or (None, 0) if insufficient data
         """
+        if len(self._raw_trajectory) < 8:
+            return None, 0.0
+        
+        points = list(self._raw_trajectory)[-min(20, len(self._raw_trajectory)):]
+        if len(points) < 5:
+            return None, 0.0
+        
+        # Build arrays
+        times = []
+        xs = []
+        ys = []
+        
+        t0 = points[0].timestamp_ns
+        for p in points:
+            t = (p.timestamp_ns - t0) / 1e9  # Convert to seconds
+            times.append(t)
+            xs.append(p.x)
+            ys.append(p.y)
+        
+        times = np.array(times)
+        xs = np.array(xs)
+        ys = np.array(ys)
+        
+        # Simple outlier rejection using median absolute deviation
+        def reject_outliers(arr, threshold=2.5):
+            """Returns mask of inliers."""
+            med = np.median(arr)
+            mad = np.median(np.abs(arr - med))
+            if mad < 1e-6:
+                return np.ones(len(arr), dtype=bool)
+            modified_z = 0.6745 * (arr - med) / mad
+            return np.abs(modified_z) < threshold
+        
+        # Compute velocities between consecutive points for outlier detection
+        velocities = []
+        for i in range(1, len(times)):
+            dt = times[i] - times[i-1]
+            if dt > 0:
+                vx = (xs[i] - xs[i-1]) / dt
+                vy = (ys[i] - ys[i-1]) / dt
+                velocities.append(np.sqrt(vx**2 + vy**2))
+            else:
+                velocities.append(0)
+        velocities = np.array([0] + velocities)  # Pad first element
+        
+        inlier_mask = reject_outliers(velocities)
+        
+        if np.sum(inlier_mask) < 5:
+            inlier_mask = np.ones(len(times), dtype=bool)
+        
+        times_clean = times[inlier_mask]
+        xs_clean = xs[inlier_mask]
+        ys_clean = ys[inlier_mask]
+        
+        if len(times_clean) < 3:
+            return None, 0.0
+        
+        # Linear regression: x = vx*t + x0, y = vy*t + y0
+        n = len(times_clean)
+        sum_t = np.sum(times_clean)
+        sum_t2 = np.sum(times_clean**2)
+        
+        denom = n * sum_t2 - sum_t**2
+        if abs(denom) < 1e-10:
+            return None, 0.0
+        
+        # Fit x(t)
+        sum_x = np.sum(xs_clean)
+        sum_tx = np.sum(times_clean * xs_clean)
+        vx = (n * sum_tx - sum_t * sum_x) / denom
+        x0 = (sum_x - vx * sum_t) / n
+        
+        # Fit y(t)
+        sum_y = np.sum(ys_clean)
+        sum_ty = np.sum(times_clean * ys_clean)
+        vy = (n * sum_ty - sum_t * sum_y) / denom
+        y0 = (sum_y - vy * sum_t) / n
+        
+        # Calculate R² for x
+        x_pred = vx * times_clean + x0
+        ss_res_x = np.sum((xs_clean - x_pred)**2)
+        ss_tot_x = np.sum((xs_clean - np.mean(xs_clean))**2)
+        r2_x = 1 - (ss_res_x / ss_tot_x) if ss_tot_x > 0 else 0
+        
+        # Calculate R² for y
+        y_pred = vy * times_clean + y0
+        ss_res_y = np.sum((ys_clean - y_pred)**2)
+        ss_tot_y = np.sum((ys_clean - np.mean(ys_clean))**2)
+        r2_y = 1 - (ss_res_y / ss_tot_y) if ss_tot_y > 0 else 0
+        
+        # Combined R² (weighted by variance in each direction)
+        total_var = ss_tot_x + ss_tot_y
+        if total_var > 0:
+            r2 = (r2_x * ss_tot_x + r2_y * ss_tot_y) / total_var
+        else:
+            r2 = 0.5 * (r2_x + r2_y)
+        
+        result = Velocity(vx=vx, vy=vy)
+        
+        logger.debug(f"Exit velocity (regression): {result.speed:.1f} px/s @ {result.direction_deg:.1f}°, "
+                    f"R²={r2:.3f}, points={len(times_clean)}")
+        
+        return result, r2
+    
+    def _compute_exit_velocity(self) -> Optional[Velocity]:
+        """
+        Compute exit velocity using robust methods.
+        
+        Priority:
+        1. Linear regression (if R² > 0.8)
+        2. Weighted average (fallback)
+        
+        Returns:
+            Velocity object or None if insufficient data
+        """
+        # Try regression first (more robust)
+        reg_vel, r2 = self._compute_exit_velocity_regression()
+        if reg_vel and r2 > 0.8:
+            logger.info(f"Exit velocity (regression): {reg_vel.speed:.1f} px/s @ {reg_vel.direction_deg:.1f}°")
+            return reg_vel
+        
+        # Fallback to weighted average
         if len(self._raw_trajectory) < self.EXIT_VELOCITY_WINDOW:
-            # Fall back to current velocity if not enough data
             return self._velocity
         
         points = list(self._raw_trajectory)[-self.EXIT_VELOCITY_WINDOW:]
@@ -728,7 +944,7 @@ class BallTracker:
             p1 = points[i - 1]
             p2 = points[i]
             
-            dt_s = (p2.timestamp_ns - p1.timestamp_ns) / 1e9
+            dt_s = self._get_dt_from_timestamps(p1.timestamp_ns, p2.timestamp_ns)
             if dt_s <= 0:
                 continue
             
@@ -740,9 +956,8 @@ class BallTracker:
             return self._velocity
         
         # Exponential weights: more recent = higher weight
-        # np.exp(np.linspace(-2, 0, n)) gives weights from ~0.14 to 1.0
         weights = np.exp(np.linspace(-2, 0, len(velocities)))
-        weights = weights / weights.sum()  # Normalize to sum to 1
+        weights = weights / weights.sum()
         
         # Weighted average velocity
         vx_weighted = sum(w * v[0] for w, v in zip(weights, velocities))
@@ -750,10 +965,135 @@ class BallTracker:
         
         result = Velocity(vx=vx_weighted, vy=vy_weighted)
         
-        logger.debug(f"Exit velocity computed: {result.speed:.1f} px/s @ {result.direction_deg:.1f}° "
-                    f"(from {len(velocities)} samples)")
+        logger.info(f"Exit velocity (weighted): {result.speed:.1f} px/s @ {result.direction_deg:.1f}°")
         
         return result
+    
+    def _fit_trajectory_physics(self) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+        """
+        Fit linear deceleration physics model to trajectory data.
+        
+        Uses the fundamental physics relationship: v² = v₀² - 2ad
+        Where:
+        - v = current velocity
+        - v₀ = initial velocity
+        - a = deceleration
+        - d = distance traveled
+        
+        By fitting this to all trajectory points, we get:
+        - More accurate initial velocity (uses all data, not just first frames)
+        - Actual deceleration on YOUR surface (not assumed)
+        - Predicted total distance = v₀²/(2a)
+        
+        Returns:
+            (initial_speed_px_s, deceleration_px_s2, predicted_total_distance_px)
+            or (None, None, None) if insufficient data or fit fails
+        """
+        if len(self._raw_trajectory) < 8:
+            logger.debug(f"Trajectory fitting: insufficient data ({len(self._raw_trajectory)} < 8 points)")
+            return None, None, None
+        
+        points = list(self._raw_trajectory)
+        
+        # Calculate instantaneous speeds and cumulative distances
+        speeds = []
+        distances = []
+        
+        cum_dist = 0.0
+        for i in range(1, len(points)):
+            dt = self._get_dt_from_timestamps(points[i-1].timestamp_ns, points[i].timestamp_ns)
+            if dt <= 0:
+                continue
+            
+            dx = points[i].x - points[i-1].x
+            dy = points[i].y - points[i-1].y
+            step_dist = np.sqrt(dx*dx + dy*dy)
+            speed = step_dist / dt
+            
+            cum_dist += step_dist
+            
+            # Skip outliers (sudden speed jumps often indicate detection noise)
+            if len(speeds) > 0:
+                prev_speed = speeds[-1]
+                if abs(speed - prev_speed) > prev_speed * 0.5 and abs(speed - prev_speed) > 200:
+                    logger.debug(f"Trajectory fitting: skipping outlier speed {speed:.1f} (prev={prev_speed:.1f})")
+                    continue
+            
+            speeds.append(speed)
+            distances.append(cum_dist)
+        
+        if len(speeds) < 5:
+            logger.debug(f"Trajectory fitting: insufficient valid speeds ({len(speeds)} < 5)")
+            return None, None, None
+        
+        # Fit v² = v₀² - 2ad using least squares
+        # Rewrite as: v² = b + m*d where b = v₀², m = -2a
+        # This is linear regression: y = b + m*x
+        
+        v_squared = [s*s for s in speeds]
+        
+        n = len(v_squared)
+        sum_x = sum(distances)
+        sum_y = sum(v_squared)
+        sum_xy = sum(d*vs for d, vs in zip(distances, v_squared))
+        sum_xx = sum(d*d for d in distances)
+        
+        denom = n * sum_xx - sum_x * sum_x
+        if abs(denom) < 1e-10:
+            logger.debug("Trajectory fitting: degenerate data (zero denominator)")
+            return None, None, None
+        
+        slope = (n * sum_xy - sum_x * sum_y) / denom  # This is -2a
+        intercept = (sum_y - slope * sum_x) / n  # This is v₀²
+        
+        # Validate fit results
+        if intercept <= 0:
+            logger.debug(f"Trajectory fitting: invalid intercept {intercept:.1f} (v₀² must be positive)")
+            return None, None, None
+        
+        if slope >= 0:
+            # Ball accelerating or no deceleration - physics doesn't make sense
+            logger.debug(f"Trajectory fitting: invalid slope {slope:.1f} (should be negative for deceleration)")
+            return None, None, None
+        
+        v0 = np.sqrt(intercept)
+        a = -slope / 2
+        
+        # Predicted total distance = v₀² / (2a)
+        total_dist = intercept / (-slope)
+        
+        # Calculate R² (coefficient of determination) to assess fit quality
+        y_mean = sum_y / n
+        ss_tot = sum((vs - y_mean)**2 for vs in v_squared)
+        ss_res = sum((vs - (intercept + slope * d))**2 for vs, d in zip(v_squared, distances))
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+        
+        a_m_s2 = a / self._current_pixels_per_meter
+        
+        logger.info(f"Trajectory physics fit: v₀={v0:.1f}px/s, a={a:.1f}px/s² ({a_m_s2:.3f}m/s²), "
+                   f"predicted_dist={total_dist:.1f}px, R²={r_squared:.3f}, points={n}")
+        
+        # GUARDRAILS: Reject unrealistic fitted values
+        # These indicate tracking issues (motion blur, lost frames) rather than true physics
+        
+        # 1. Deceleration sanity check: realistic putting surfaces are 0.25-0.9 m/s²
+        if a_m_s2 < 0.25 or a_m_s2 > 0.9:
+            logger.warning(f"Trajectory fitting: deceleration {a_m_s2:.2f} m/s² outside realistic range [0.25, 0.9] - rejecting fit")
+            return None, None, None
+        
+        # 2. R² quality check: low R² means noisy/unreliable fit
+        # Lowered threshold from 0.85 to 0.70 - trajectory fit often better than 2-frame measurement
+        if r_squared < 0.70:
+            logger.warning(f"Trajectory fitting: R²={r_squared:.3f} too low (need >0.70) - rejecting fit")
+            return None, None, None
+        
+        # 3. Minimum data points for reliable fit (lowered from 15 to 8)
+        if n < 8:
+            logger.warning(f"Trajectory fitting: only {n} points (need ≥8) - rejecting fit")
+            return None, None, None
+        
+        logger.info(f"Trajectory fit ACCEPTED: decel={a_m_s2:.3f}m/s², R²={r_squared:.3f}")
+        return v0, a, total_dist
     
     def _check_transitions(self, detection: Detection, timestamp_ns: int, frame_id: int):
         """Check for state machine transitions."""
@@ -772,6 +1112,7 @@ class BallTracker:
         Requires MOTION_CONFIRM_FRAMES consecutive triggers to prevent false shots.
         Must maintain motion direction (not just jitter in place).
         Motion direction must be within VALID_MOTION_ANGLE_DEG of forward direction.
+        Ball signature must be validated (not putter/hand).
         """
         if self._smoothed_pos is None:
             return
@@ -797,6 +1138,11 @@ class BallTracker:
         motion_detected = displacement > self.MOTION_THRESHOLD_PX
         
         if motion_detected:
+            # Validate ball signature first (must look like a ball, not putter)
+            if not self._validate_ball_signature(detection):
+                logger.debug(f"Motion detected but ball signature invalid - waiting for stable ball")
+                return
+            
             # Check motion direction against valid putting direction
             motion_direction = np.degrees(np.arctan2(dy, dx))
             
@@ -863,6 +1209,9 @@ class BallTracker:
         self._trajectory.clear()
         self._raw_trajectory.clear()
         
+        # Clear shot timestamps for timing stats
+        self._shot_timestamps = []
+        
         # Add the start position as first point of the new trajectory
         if self._shot_start_pos:
             self._trajectory.append(TrackPoint(
@@ -880,6 +1229,9 @@ class BallTracker:
         # Clear motion start tracking
         if hasattr(self, '_motion_start_pos'):
             del self._motion_start_pos
+        
+        # Reset ball validation
+        self._ball_stable_count = 0
         
         logger.info(f"Shot started at position: {self._shot_start_pos}")
     
@@ -920,8 +1272,43 @@ class BallTracker:
         
         self._state = ShotState.STOPPED
         
+        # Compute shot timing stats
+        self._compute_shot_timing_stats()
+        
         # Compute shot result
         self._compute_shot_result(frame_id)
+    
+    def _compute_shot_timing_stats(self):
+        """Compute frame timing statistics for the shot."""
+        if len(self._shot_timestamps) < 2:
+            self._shot_timing_stats = None
+            return
+        
+        # Calculate dt between consecutive frames
+        dts = []
+        for i in range(1, len(self._shot_timestamps)):
+            dt_ms = (self._shot_timestamps[i] - self._shot_timestamps[i-1]) / 1e6
+            if dt_ms > 0:
+                dts.append(dt_ms)
+        
+        if not dts:
+            self._shot_timing_stats = None
+            return
+        
+        dts = np.array(dts)
+        effective_fps = 1000.0 / np.mean(dts) if np.mean(dts) > 0 else 0
+        
+        self._shot_timing_stats = FrameTimingStats(
+            effective_fps=effective_fps,
+            dt_mean_ms=float(np.mean(dts)),
+            dt_std_ms=float(np.std(dts)),
+            dt_min_ms=float(np.min(dts)),
+            dt_max_ms=float(np.max(dts)),
+            frame_count=len(self._shot_timestamps)
+        )
+        
+        logger.info(f"Shot timing: fps={effective_fps:.1f}, dt={np.mean(dts):.2f}±{np.std(dts):.2f}ms, "
+                   f"frames={len(self._shot_timestamps)}")
     
     def _compute_shot_result(self, frame_id: int):
         """Compute final shot metrics. Called once when shot stops - values are frozen."""
@@ -988,7 +1375,7 @@ class BallTracker:
             initial_direction_deg=initial_direction,
             frames_to_tracking=frames_to_tracking,
             frames_to_speed=frames_to_speed,
-            trajectory=trajectory_points,  # Full trajectory (no longer slicing)
+            trajectory=trajectory_points,
             duration_ms=duration_ms,
             physical_distance_px=physical_distance_px,
             virtual_distance_px=virtual_distance_px,
@@ -1036,6 +1423,18 @@ class BallTracker:
         self._frames_lost = 0
         self._last_valid_position = None
         self._last_valid_velocity = None
+        self._fitted_deceleration = None
+        self._fitted_physics = None
+        self._expected_total_distance_px = 0.0
+        self._expected_virtual_distance_px = 0.0
+        
+        # Clear ball validation
+        self._ball_stable_count = 0
+        self._last_ball_check_radius = 0.0
+        
+        # Clear shot timing
+        self._shot_timestamps = []
+        self._shot_timing_stats = None
     
     def _compute_idle_stddev(self) -> float:
         """Compute position standard deviation when idle."""
@@ -1097,6 +1496,18 @@ class BallTracker:
         self._frames_lost = 0
         self._last_valid_position = None
         self._last_valid_velocity = None
+        self._fitted_deceleration = None
+        self._fitted_physics = None
+        self._expected_total_distance_px = 0.0
+        self._expected_virtual_distance_px = 0.0
+        
+        # Clear ball validation
+        self._ball_stable_count = 0
+        self._last_ball_check_radius = 0.0
+        
+        # Clear timing
+        self._shot_timestamps = []
+        self._shot_timing_stats = None
         
         logger.info("Tracker reset")
     
@@ -1135,6 +1546,16 @@ class BallTracker:
     def trajectory(self) -> List[Tuple[float, float]]:
         """Get current trajectory as list of (x, y) tuples."""
         return [(p.x, p.y) for p in self._trajectory]
+    
+    @property
+    def effective_fps(self) -> float:
+        """Get effective FPS from actual frame timestamps."""
+        return self._effective_fps
+    
+    @property
+    def shot_timing_stats(self) -> Optional[FrameTimingStats]:
+        """Get timing statistics from the last shot."""
+        return self._shot_timing_stats
     
     def set_frame_bounds(self, width: int, height: int):
         """Set frame dimensions for exit detection."""
@@ -1303,13 +1724,19 @@ class BallTracker:
         return False
     
     def _transition_to_virtual_rolling(self, timestamp_ns: int, frame_id: int):
-        """Transition from TRACKING to VIRTUAL_ROLLING when ball exits frame."""
+        """
+        Transition from TRACKING to VIRTUAL_ROLLING when ball exits frame.
+        
+        CRITICAL FIX: Exit speed used for virtual rolling MUST NEVER be 0.
+        If physics says ball should have stopped but we measured it still moving,
+        ALWAYS use the MEASURED exit speed as fallback.
+        """
         logger.info(f"TRACKING -> VIRTUAL_ROLLING at frame {frame_id}")
         
         # Capture exit state
         exit_pos = self._last_valid_position or self._current_pos
         
-        # Use weighted average exit velocity for more accurate virtual roll
+        # Use robust exit velocity (regression preferred, weighted average fallback)
         exit_vel = self._compute_exit_velocity()
         if exit_vel is None:
             exit_vel = self._last_valid_velocity or self._velocity
@@ -1321,12 +1748,135 @@ class BallTracker:
         
         logger.info(f"Exit velocity (weighted): {exit_vel.speed:.1f} px/s @ {exit_vel.direction_deg:.1f}°")
         
+        # Get INITIAL velocity from impact (most reliable for total distance calculation)
+        initial_speed_px_s = 0.0
+        if self._impact_velocity:
+            initial_speed_px_s = self._impact_velocity.speed
+        elif self._velocity_history:
+            # Use first high velocity measurement
+            for v in self._velocity_history:
+                if v.speed > self.STOPPED_VELOCITY_THRESHOLD:
+                    initial_speed_px_s = v.speed
+                    break
+        
+        # If we don't have a valid impact velocity, use exit velocity
+        if initial_speed_px_s < self.MIN_EXIT_SPEED_PX_S:
+            initial_speed_px_s = exit_vel.speed
+        
+        logger.info(f"Initial velocity: {initial_speed_px_s:.1f} px/s ({initial_speed_px_s/self._current_pixels_per_meter:.2f} m/s)")
+        
+        # Try to fit physics model to trajectory
+        fitted_v0, fitted_a, fitted_total_dist = self._fit_trajectory_physics()
+        
         curvature = self._compute_trajectory_curvature()
+        
+        # Calculate physical distance traveled so far
+        physical_distance_px = 0.0
+        if self._shot_start_pos and exit_pos:
+            physical_distance_px = np.sqrt(
+                (exit_pos[0] - self._shot_start_pos[0])**2 + 
+                (exit_pos[1] - self._shot_start_pos[1])**2
+            )
+        
+        # Get configured deceleration
+        a = self.get_deceleration_px_s2()
+        a_m_s2 = a / self._current_pixels_per_meter
+        
+        # Try fitted physics if it passed validation
+        use_fitted = False
+        fitted_total_distance_to_use = None
+        if fitted_v0 is not None and fitted_a is not None and fitted_total_dist is not None:
+            fitted_a_m_s2 = fitted_a / self._current_pixels_per_meter
+            fitted_v0_m_s = fitted_v0 / self._current_pixels_per_meter
+            
+            # Use fitted values if deceleration is within reasonable range [0.3, 0.8] m/s²
+            # This is wider than before because we trust the trajectory fit
+            if 0.30 < fitted_a_m_s2 < 0.80:
+                # USE THE FITTED TOTAL DISTANCE DIRECTLY - it's based on all trajectory points
+                fitted_total_distance_to_use = fitted_total_dist
+                use_fitted = True
+                logger.info(f"Using FITTED physics: v₀={fitted_v0_m_s:.2f}m/s, a={fitted_a_m_s2:.3f}m/s², predicted={fitted_total_dist/self._current_pixels_per_meter*100:.1f}cm")
+            else:
+                logger.info(f"Fitted deceleration {fitted_a_m_s2:.3f} m/s² outside range [0.30, 0.80] - using configured")
+        
+        self._fitted_deceleration = a if use_fitted else None
+        
+        # Calculate expected exit speed from physics
+        # v² = v₀² - 2*a*d → v_exit = sqrt(v₀² - 2*a*physical_dist)
+        exit_speed_squared = initial_speed_px_s**2 - 2 * a * physical_distance_px
+        calculated_exit_speed = np.sqrt(max(0, exit_speed_squared))
+        
+        # EXIT SPEED SELECTION:
+        # When trajectory fit is ACCEPTED: use calculated exit speed (consistent with fit)
+        # When trajectory fit is REJECTED: use MEASURED exit speed (more reliable for fast putts)
+        #
+        # Why measured exit speed is better when fit fails:
+        # 1. The 2-frame initial velocity is often overestimated by 20-30% for fast putts
+        # 2. Measured exit speed uses regression over multiple frames (more stable)
+        # 3. Exit speed directly determines virtual distance: d_virtual = v_exit²/(2a)
+        
+        if use_fitted:
+            # Trajectory fit accepted - use calculated exit speed for consistency
+            robust_exit_speed = calculated_exit_speed
+            if calculated_exit_speed < self.MIN_EXIT_SPEED_PX_S and exit_vel.speed > self.MIN_EXIT_SPEED_PX_S:
+                logger.warning(f"Physics says ball stopped (v_exit={calculated_exit_speed:.1f}) but measured={exit_vel.speed:.1f}px/s - using measured as fallback")
+                robust_exit_speed = exit_vel.speed
+            else:
+                logger.info(f"Using PHYSICS-DERIVED exit speed: {calculated_exit_speed:.1f} px/s (from v₀={initial_speed_px_s:.1f}, d={physical_distance_px:.1f})")
+        else:
+            # Trajectory fit rejected - TRUST the measured exit speed from regression
+            # This is much more reliable than the 2-frame initial velocity for fast putts
+            robust_exit_speed = exit_vel.speed
+            logger.info(f"Using MEASURED exit speed: {exit_vel.speed:.1f} px/s (trajectory fit rejected)")
+            logger.info(f"  (Physics-derived would be {calculated_exit_speed:.1f} px/s - likely overestimated)")
+        
+        logger.info(f"Exit speed: measured={exit_vel.speed:.1f}, calculated={calculated_exit_speed:.1f} px/s")
+        
+        # Use robust exit speed for virtual ball velocity
+        if exit_vel.speed > 0:
+            scale = robust_exit_speed / exit_vel.speed
+            virtual_vx = exit_vel.vx * scale
+            virtual_vy = exit_vel.vy * scale
+        else:
+            # Fallback: use last known direction
+            direction_rad = np.radians(exit_vel.direction_deg)
+            virtual_vx = robust_exit_speed * np.cos(direction_rad)
+            virtual_vy = robust_exit_speed * np.sin(direction_rad)
+        
+        # Calculate expected distances
+        # If we have a fitted trajectory, use its predicted distance (most accurate)
+        # Otherwise, use MEASURED EXIT VELOCITY for virtual distance calculation
+        # 
+        # KEY INSIGHT: For fast putts, the 2-frame initial velocity measurement is unreliable
+        # (often overestimated by 20-30%). The measured exit velocity from regression uses
+        # multiple frames and is much more stable.
+        #
+        # Formula: total_distance = physical_distance + v_exit²/(2*a)
+        
+        if fitted_total_distance_to_use is not None:
+            expected_total_distance_px = fitted_total_distance_to_use
+            logger.info(f"Using FITTED total distance: {expected_total_distance_px:.1f}px ({expected_total_distance_px/self._current_pixels_per_meter*100:.1f}cm)")
+        else:
+            # Use MEASURED exit speed for virtual distance (more reliable than 2-frame initial speed)
+            # total = physical + v_exit²/(2a)
+            measured_exit_speed = exit_vel.speed
+            virtual_distance_from_exit = (measured_exit_speed ** 2) / (2 * a)
+            expected_total_distance_px = physical_distance_px + virtual_distance_from_exit
+            
+            # Log both methods for comparison
+            physics_total = (initial_speed_px_s ** 2) / (2 * a)
+            logger.info(f"Using EXIT-BASED total distance: physical + v_exit²/(2a) = {physical_distance_px:.1f} + {virtual_distance_from_exit:.1f} = {expected_total_distance_px:.1f}px ({expected_total_distance_px/self._current_pixels_per_meter*100:.1f}cm)")
+            logger.info(f"  (Comparison: v₀-based would be {physics_total:.1f}px = {physics_total/self._current_pixels_per_meter*100:.1f}cm)")
+        
+        expected_virtual_distance_px = max(0, expected_total_distance_px - physical_distance_px)
+        
+        # The robust_exit_speed is used for the ANIMATION (virtual ball movement)
+        # but the DISTANCE should be based on initial velocity physics
         
         self._exit_state = ExitState(
             position=exit_pos,
-            velocity=(exit_vel.vx, exit_vel.vy),
-            speed=exit_vel.speed,
+            velocity=(virtual_vx, virtual_vy),
+            speed=robust_exit_speed,
             direction_deg=exit_vel.direction_deg,
             curvature=curvature,
             timestamp_ns=timestamp_ns,
@@ -1334,18 +1884,21 @@ class BallTracker:
             trajectory_before_exit=[(p.x, p.y) for p in self._trajectory]
         )
         
-        # Calculate expected final distance using LINEAR physics: distance = v0²/(2a)
-        a = self.get_deceleration_px_s2()
-        expected_max_distance = (exit_vel.speed ** 2) / (2 * a)
-        expected_stop_time = exit_vel.speed / a
+        # Store for later use
+        self._fitted_physics = (fitted_v0, fitted_a, fitted_total_dist) if fitted_a else None
+        self._expected_total_distance_px = expected_total_distance_px
+        self._expected_virtual_distance_px = expected_virtual_distance_px
+        
+        # Calculate timing
+        expected_stop_time = robust_exit_speed / a if robust_exit_speed > 0 else 0
         
         # Initialize virtual ball at exit position
         self._virtual_ball = VirtualBallState(
             x=exit_pos[0],
             y=exit_pos[1],
-            vx=exit_vel.vx,
-            vy=exit_vel.vy,
-            speed=exit_vel.speed,
+            vx=virtual_vx,
+            vy=virtual_vy,
+            speed=robust_exit_speed,
             distance_traveled=0.0,
             time_since_exit=0.0,
             is_rolling=True,
@@ -1357,11 +1910,14 @@ class BallTracker:
         
         logger.info(f"=== VIRTUAL ROLLING STARTED ===")
         logger.info(f"  Exit position: {exit_pos}")
-        logger.info(f"  Exit speed: {exit_vel.speed:.1f} px/s")
+        logger.info(f"  Physical distance: {physical_distance_px:.1f} px ({physical_distance_px/self._current_pixels_per_meter*100:.1f} cm)")
+        logger.info(f"  Initial speed: {initial_speed_px_s:.1f} px/s ({initial_speed_px_s/self._current_pixels_per_meter:.2f} m/s)")
+        logger.info(f"  Calculated exit speed: {calculated_exit_speed:.1f} px/s")
         logger.info(f"  Exit direction: {exit_vel.direction_deg:.1f}°")
         logger.info(f"  Curvature: {curvature:.4f}°/px")
-        logger.info(f"  Deceleration: {a:.1f} px/s²")
-        logger.info(f"  Expected distance: {expected_max_distance:.1f} px")
+        logger.info(f"  Deceleration: {a:.1f} px/s² ({a_m_s2:.3f} m/s²)")
+        logger.info(f"  Expected TOTAL distance: {self._expected_total_distance_px:.1f} px ({self._expected_total_distance_px/self._current_pixels_per_meter*100:.1f} cm)")
+        logger.info(f"  Expected VIRTUAL distance: {expected_virtual_distance_px:.1f} px ({expected_virtual_distance_px/self._current_pixels_per_meter*100:.1f} cm)")
         logger.info(f"  Expected stop time: {expected_stop_time:.2f} s")
     
     def _update_virtual_ball(self, timestamp_ns: int, frame_id: int):
@@ -1390,16 +1946,18 @@ class BallTracker:
         # Ball stops at t_stop = v0/a
         
         initial_speed = self._exit_state.speed
+        
+        # Use configured deceleration (fitted deceleration already incorporated into exit speed)
         a = self.get_deceleration_px_s2()
         
         # Time when ball stops
-        t_stop = initial_speed / a
+        t_stop = initial_speed / a if a > 0 else 0
         
         # Check if ball has stopped
         if dt >= t_stop:
             # Ball has stopped - use final values
             current_speed = 0.0
-            distance = (initial_speed ** 2) / (2 * a)  # Final distance
+            distance = (initial_speed ** 2) / (2 * a) if a > 0 else 0
             logger.info(f"Virtual ball stopped: t={dt:.2f}s >= t_stop={t_stop:.2f}s")
             self._finish_virtual_rolling(frame_id)
             return
@@ -1444,7 +2002,7 @@ class BallTracker:
         self._virtual_ball.time_since_exit = dt
         
         # Calculate final position (where ball will stop)
-        max_distance = (initial_speed ** 2) / (2 * a)
+        max_distance = (initial_speed ** 2) / (2 * a) if a > 0 else 0
         if abs(self._exit_state.curvature) > 0.001:
             final_avg_dir = base_direction + curvature_rad * max_distance / 2
             final_x = exit_x + max_distance * np.cos(final_avg_dir)
@@ -1477,10 +2035,18 @@ class BallTracker:
             virtual_distance = self._virtual_ball.distance_traveled
             total_distance = physical_distance + virtual_distance
             
+            # Convert to real-world units for clearer logging
+            ppm = self._current_pixels_per_meter
+            physical_cm = (physical_distance / ppm) * 100
+            virtual_cm = (virtual_distance / ppm) * 100
+            total_cm = (total_distance / ppm) * 100
+            expected_total_cm = (self._expected_total_distance_px / ppm) * 100 if self._expected_total_distance_px > 0 else 0
+            expected_virtual_cm = (self._expected_virtual_distance_px / ppm) * 100 if self._expected_virtual_distance_px > 0 else 0
+            
             logger.info(f"=== VIRTUAL ROLLING FINISHED ===")
-            logger.info(f"  Physical distance: {physical_distance:.1f} px")
-            logger.info(f"  Virtual distance: {virtual_distance:.1f} px")
-            logger.info(f"  TOTAL distance: {total_distance:.1f} px")
+            logger.info(f"  Physical distance: {physical_distance:.1f} px ({physical_cm:.1f} cm)")
+            logger.info(f"  Virtual distance: {virtual_distance:.1f} px ({virtual_cm:.1f} cm) [expected: {expected_virtual_cm:.1f} cm]")
+            logger.info(f"  TOTAL distance: {total_distance:.1f} px ({total_cm:.1f} cm) [expected: {expected_total_cm:.1f} cm]")
             logger.info(f"  Roll time: {self._virtual_ball.time_since_exit:.2f}s")
             logger.info(f"  Final position: ({self._virtual_ball.x:.1f}, {self._virtual_ball.y:.1f})")
         
