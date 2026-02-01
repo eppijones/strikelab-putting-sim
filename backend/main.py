@@ -19,6 +19,7 @@ import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from .camera import Camera, CameraMode, FrameData
@@ -28,6 +29,9 @@ from .calibration import Calibrator, AutoCalibrator
 from .predictor import BallPredictor
 from .config import get_config_manager, get_config
 from .lens_calibration import load_lens_calibration, get_undistort_maps, LENS_PARAMS_FILE
+from .game_logic import GameLogic, get_game_logic, ShotResult as GameShotResult
+from .session import SessionManager, get_session_manager
+from .drills import DrillManager, get_drill_manager, DrillType
 
 # Configure logging
 logging.basicConfig(
@@ -143,6 +147,13 @@ class PuttingSimApp:
         # Locked calibration for completed shots (prevents distance changing after STOPPED)
         self._shot_locked_ppm: Optional[float] = None
         self._last_shot_state: Optional[ShotState] = None
+        
+        # Game logic and session tracking
+        self.game_logic = get_game_logic()
+        self.session_manager = get_session_manager()
+        self.drill_manager = get_drill_manager()
+        self._previous_game_state: Optional[ShotState] = None
+        self._shot_analyzed = False  # Flag to prevent duplicate analysis
         
         # FPS tracking
         self._cap_fps = FPSTracker()
@@ -297,6 +308,63 @@ class PuttingSimApp:
             # Update tracker with current calibration when ARMED (not during shot)
             if self.auto_calibrator.is_calibrated and current_state == ShotState.ARMED:
                 self.tracker.set_calibration(self.auto_calibrator.pixels_per_meter)
+        
+        # Analyze shot when transitioning to STOPPED
+        if (current_state == ShotState.STOPPED and 
+            self._previous_game_state != ShotState.STOPPED and
+            not self._shot_analyzed):
+            self._analyze_completed_shot()
+            self._shot_analyzed = True
+        
+        # Reset shot analyzed flag when returning to ARMED
+        if current_state == ShotState.ARMED:
+            self._shot_analyzed = False
+        
+        # Track previous state for transition detection
+        self._previous_game_state = current_state
+    
+    def _analyze_completed_shot(self):
+        """Analyze a completed shot and record in session."""
+        if not self._current_state or not self._current_state.shot_result:
+            return
+        
+        shot_result = self._current_state.shot_result
+        ppm = self._shot_locked_ppm or self.get_pixels_per_meter()
+        
+        # Build shot data dict for analysis
+        shot_data = {
+            'speed_m_s': shot_result.initial_speed_px_s / ppm,
+            'distance_m': shot_result.total_distance_px / ppm,
+            'direction_deg': shot_result.initial_direction_deg,
+        }
+        
+        # Check if drill is active
+        drill_state = self.drill_manager.get_state()
+        if drill_state.get('active'):
+            # Record drill attempt
+            self.drill_manager.record_attempt(
+                actual_distance_m=shot_data['distance_m'],
+                direction_deg=shot_data['direction_deg']
+            )
+            logger.info(f"Drill attempt recorded: distance={shot_data['distance_m']:.2f}m")
+            return  # Don't also record as regular session shot during drills
+        
+        # Analyze the shot against the hole
+        analysis = self.game_logic.analyze_shot_from_backend_state(shot_data, ppm)
+        
+        if analysis:
+            # Record in session
+            self.session_manager.record_shot(
+                analysis=analysis,
+                shot_data=shot_data,
+                target_distance_m=self.game_logic.get_hole_distance()
+            )
+            
+            logger.info(
+                f"Shot analyzed: {analysis.result.value}, "
+                f"made={self.session_manager.get_putts_made()}/{self.session_manager.get_total_putts()} "
+                f"({self.session_manager.get_make_percentage():.1f}%)"
+            )
     
     def get_pixels_per_meter(self) -> float:
         """
@@ -490,7 +558,11 @@ class PuttingSimApp:
             "lens_calibrated": self._lens_calibrated,
             "pixels_per_meter": round(pixels_per_meter, 1),
             "overlay_radius_scale": overlay_radius_scale,
-            "resolution": list(self.camera.resolution) if self.camera else [1280, 800]
+            "resolution": list(self.camera.resolution) if self.camera else [1280, 800],
+            # Game logic and session data
+            "game": self.game_logic.get_state_for_websocket(),
+            "session": self.session_manager.get_state_for_websocket(),
+            "drill": self.drill_manager.get_state()
         }
     
     async def broadcast_state(self):
@@ -564,6 +636,15 @@ app = FastAPI(
     title="StrikeLab Putting Sim",
     version="1.0.0",
     lifespan=lifespan
+)
+
+# Add CORS middleware to allow frontend dev server
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Serve static files
@@ -744,6 +825,409 @@ async def reset_tracker():
         sim.tracker.reset()
         return JSONResponse({"success": True})
     except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ============= Game Logic Endpoints =============
+
+@app.get("/api/game/hole")
+async def get_hole_config():
+    """Get current hole configuration."""
+    try:
+        sim = get_app_instance()
+        return JSONResponse({
+            "success": True,
+            "hole_distance_m": sim.game_logic.get_hole_distance(),
+            "hole_radius_m": sim.game_logic.hole.radius_m
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/game/hole")
+async def set_hole_distance(data: dict):
+    """
+    Set the hole distance.
+    
+    Expected data:
+    {
+        "distance_m": float  # Distance in meters (1-10)
+    }
+    """
+    try:
+        sim = get_app_instance()
+        distance_m = data.get("distance_m")
+        
+        if distance_m is None:
+            return JSONResponse({
+                "success": False,
+                "error": "distance_m is required"
+            }, status_code=400)
+        
+        # Validate range
+        if not 0.5 <= distance_m <= 15.0:
+            return JSONResponse({
+                "success": False,
+                "error": "distance_m must be between 0.5 and 15.0 meters"
+            }, status_code=400)
+        
+        sim.game_logic.set_hole_distance(distance_m)
+        
+        return JSONResponse({
+            "success": True,
+            "hole_distance_m": distance_m
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/game/last-shot")
+async def get_last_shot_result():
+    """Get the result of the last analyzed shot."""
+    try:
+        sim = get_app_instance()
+        analysis = sim.game_logic.get_last_analysis()
+        
+        if not analysis:
+            return JSONResponse({
+                "success": False,
+                "error": "No shot has been analyzed yet"
+            })
+        
+        return JSONResponse({
+            "success": True,
+            "result": analysis.result.value,
+            "is_made": analysis.is_made,
+            "distance_to_hole_m": round(analysis.distance_to_hole_m, 3),
+            "lateral_miss_m": round(analysis.lateral_miss_m, 3),
+            "depth_miss_m": round(analysis.depth_miss_m, 3),
+            "miss_description": analysis.miss_description
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ============= Session Endpoints =============
+
+@app.get("/api/session")
+async def get_session():
+    """Get current session statistics."""
+    try:
+        sim = get_app_instance()
+        return JSONResponse({
+            "success": True,
+            **sim.session_manager.get_state_for_websocket()
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/session/reset")
+async def reset_session():
+    """Reset the current session and start a new one."""
+    try:
+        sim = get_app_instance()
+        sim.session_manager.reset()
+        return JSONResponse({
+            "success": True,
+            "message": "Session reset",
+            **sim.session_manager.get_state_for_websocket()
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ============= Drill Endpoints =============
+
+@app.get("/api/drill")
+async def get_drill_state():
+    """Get current drill state."""
+    try:
+        sim = get_app_instance()
+        return JSONResponse({
+            "success": True,
+            **sim.drill_manager.get_state()
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/drill/start")
+async def start_drill(data: dict):
+    """
+    Start a drill session.
+    
+    Expected data:
+    {
+        "drill_type": "distance_control" | "ladder_drill"
+    }
+    """
+    try:
+        sim = get_app_instance()
+        drill_type_str = data.get("drill_type", "distance_control")
+        
+        try:
+            drill_type = DrillType(drill_type_str)
+        except ValueError:
+            return JSONResponse({
+                "success": False,
+                "error": f"Invalid drill type: {drill_type_str}. Valid types: distance_control, ladder_drill"
+            }, status_code=400)
+        
+        state = sim.drill_manager.start_drill(drill_type)
+        
+        return JSONResponse({
+            "success": True,
+            "message": f"Started {drill_type.value} drill",
+            **state
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/drill/stop")
+async def stop_drill():
+    """Stop the current drill session."""
+    try:
+        sim = get_app_instance()
+        state = sim.drill_manager.stop_drill()
+        
+        return JSONResponse({
+            "success": True,
+            "message": "Drill stopped",
+            "final_state": state
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/session/history")
+async def get_session_history():
+    """Get shot history for the current session."""
+    try:
+        sim = get_app_instance()
+        shots = sim.session_manager.get_last_n_shots(50)
+        
+        return JSONResponse({
+            "success": True,
+            "total_shots": sim.session_manager.get_total_putts(),
+            "shots": [
+                {
+                    "timestamp": shot.timestamp,
+                    "speed_m_s": round(shot.speed_m_s, 3),
+                    "distance_m": round(shot.distance_m, 3),
+                    "direction_deg": round(shot.direction_deg, 2),
+                    "target_distance_m": round(shot.target_distance_m, 2),
+                    "result": shot.result.value,
+                    "is_made": shot.is_made,
+                    "distance_to_hole_m": round(shot.distance_to_hole_m, 3)
+                }
+                for shot in shots
+            ]
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ============= Green Speed Calibration Endpoints =============
+
+# Green speed presets (deceleration in m/s²)
+GREEN_SPEED_PRESETS = {
+    "fast": {"deceleration": 0.45, "stimp": "12-14", "description": "Tournament fast green"},
+    "medium-fast": {"deceleration": 0.55, "stimp": "10-12", "description": "Club championship"},
+    "medium": {"deceleration": 0.65, "stimp": "8-10", "description": "Standard club green"},
+    "medium-slow": {"deceleration": 0.80, "stimp": "6-8", "description": "Casual play"},
+    "slow": {"deceleration": 1.00, "stimp": "4-6", "description": "Practice mat / rough carpet"},
+}
+
+
+@app.get("/api/green-speed")
+async def get_green_speed():
+    """Get current green speed settings."""
+    try:
+        config = get_config()
+        current_decel = config.calibration.virtual_deceleration_m_s2
+        
+        # Find matching preset
+        current_preset = None
+        for name, preset in GREEN_SPEED_PRESETS.items():
+            if abs(preset["deceleration"] - current_decel) < 0.02:
+                current_preset = name
+                break
+        
+        return JSONResponse({
+            "success": True,
+            "current_deceleration_m_s2": current_decel,
+            "current_preset": current_preset,
+            "presets": GREEN_SPEED_PRESETS
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/green-speed")
+async def set_green_speed(data: dict):
+    """
+    Set green speed using a preset or custom value.
+    
+    Expected data (one of):
+    {
+        "preset": "fast" | "medium-fast" | "medium" | "medium-slow" | "slow"
+    }
+    OR
+    {
+        "deceleration_m_s2": float  # Custom value between 0.3 and 1.5
+    }
+    """
+    try:
+        sim = get_app_instance()
+        config_mgr = get_config_manager()
+        
+        preset = data.get("preset")
+        custom_decel = data.get("deceleration_m_s2")
+        
+        if preset:
+            if preset not in GREEN_SPEED_PRESETS:
+                return JSONResponse({
+                    "success": False,
+                    "error": f"Invalid preset: {preset}. Valid presets: {list(GREEN_SPEED_PRESETS.keys())}"
+                }, status_code=400)
+            
+            decel = GREEN_SPEED_PRESETS[preset]["deceleration"]
+            logger.info(f"Setting green speed to preset '{preset}' (deceleration={decel} m/s²)")
+        
+        elif custom_decel is not None:
+            if not 0.3 <= custom_decel <= 1.5:
+                return JSONResponse({
+                    "success": False,
+                    "error": "deceleration_m_s2 must be between 0.3 and 1.5"
+                }, status_code=400)
+            
+            decel = custom_decel
+            preset = "custom"
+            logger.info(f"Setting custom green speed (deceleration={decel} m/s²)")
+        
+        else:
+            return JSONResponse({
+                "success": False,
+                "error": "Must provide either 'preset' or 'deceleration_m_s2'"
+            }, status_code=400)
+        
+        # Update config
+        config_mgr.config.calibration.virtual_deceleration_m_s2 = decel
+        config_mgr.save()
+        
+        # Update tracker
+        sim.tracker.set_deceleration_m_s2(decel)
+        
+        return JSONResponse({
+            "success": True,
+            "preset": preset,
+            "deceleration_m_s2": decel
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to set green speed: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ============= Database/Analytics Endpoints =============
+
+@app.get("/api/stats/all-time")
+async def get_all_time_stats():
+    """Get all-time putting statistics from the database."""
+    try:
+        from .database import get_database
+        db = get_database()
+        
+        stats = db.get_stats(days=0)  # 0 = all time
+        return JSONResponse({
+            "success": True,
+            **stats
+        })
+    except Exception as e:
+        logger.error(f"Failed to get all-time stats: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/stats/recent")
+async def get_recent_stats():
+    """Get statistics from the last 7 days."""
+    try:
+        from .database import get_database
+        db = get_database()
+        
+        stats = db.get_stats(days=7)
+        return JSONResponse({
+            "success": True,
+            **stats
+        })
+    except Exception as e:
+        logger.error(f"Failed to get recent stats: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/stats/trend")
+async def get_trend_data():
+    """Get trend data for the last 50 shots."""
+    try:
+        from .database import get_database
+        db = get_database()
+        
+        trend = db.get_recent_trend(n_shots=50)
+        return JSONResponse({
+            "success": True,
+            **trend
+        })
+    except Exception as e:
+        logger.error(f"Failed to get trend data: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/stats/by-distance")
+async def get_stats_by_distance():
+    """Get make percentage by distance band."""
+    try:
+        from .database import get_database
+        db = get_database()
+        
+        stats = db.get_stats(days=0)
+        return JSONResponse({
+            "success": True,
+            "by_distance": stats.get('by_distance', {})
+        })
+    except Exception as e:
+        logger.error(f"Failed to get stats by distance: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/stats/export")
+async def export_stats():
+    """Export shot history to CSV."""
+    try:
+        from .database import get_database
+        from pathlib import Path
+        import tempfile
+        
+        db = get_database()
+        
+        # Create temp file for export
+        export_path = Path(tempfile.gettempdir()) / "putting_export.csv"
+        count = db.export_csv(export_path)
+        
+        if count == 0:
+            return JSONResponse({
+                "success": False,
+                "error": "No shots to export"
+            })
+        
+        return JSONResponse({
+            "success": True,
+            "exported_shots": count,
+            "file_path": str(export_path)
+        })
+    except Exception as e:
+        logger.error(f"Failed to export stats: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 

@@ -5,6 +5,7 @@ import { ShotFeedback } from './ShotFeedback';
 import { StudioBackground } from './StudioBackground';
 import { NeuralFeedback } from './NeuralFeedback';
 import { ReadyIndicator } from './ReadyIndicator';
+import { DrillMode } from './DrillMode';
 
 export const PlayMode: React.FC = () => {
   return (
@@ -15,6 +16,8 @@ export const PlayMode: React.FC = () => {
       <NeuralFeedback />
       <ShotFeedback />
       <ReadyIndicator />
+      {/* Drill panel - bottom left */}
+      <DrillMode className="absolute bottom-4 left-4 w-80" />
     </div>
   );
 };

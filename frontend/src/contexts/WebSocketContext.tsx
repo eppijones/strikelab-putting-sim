@@ -55,6 +55,56 @@ export interface VirtualBall {
   is_rolling: boolean;
 }
 
+export type ShotResultType = 'pending' | 'made' | 'miss_short' | 'miss_long' | 'miss_left' | 'miss_right' | 'lip_out';
+
+export interface GameState_Data {
+  hole: {
+    distance_m: number;
+    position_x_m: number;
+    position_y_m: number;
+    radius_m: number;
+  };
+  last_shot: {
+    result: ShotResultType;
+    distance_to_hole_m: number;
+    lateral_miss_m: number;
+    depth_miss_m: number;
+    miss_description: string;
+    is_made: boolean;
+  } | null;
+}
+
+export interface SessionData {
+  session_id: string;
+  duration_s: number;
+  total_putts: number;
+  putts_made: number;
+  make_percentage: number;
+  current_streak: number;
+  best_streak: number;
+  avg_speed_m_s: number;
+  avg_miss_distance_m: number;
+  putts_by_distance: Record<string, { total: number; made: number; percentage: number }>;
+}
+
+export type DrillType = 'none' | 'distance_control' | 'ladder_drill';
+
+export interface DrillData {
+  active: boolean;
+  drill_type: DrillType;
+  current_target_m?: number;
+  total_points?: number;
+  attempts?: number;
+  targets_completed?: number;
+  duration_s?: number;
+  ladder_position?: number;
+  last_attempt?: {
+    rating: string;
+    points: number;
+    error_cm: number;
+  };
+}
+
 export interface BackendState {
   timestamp_ms: number;
   state: GameState;
@@ -72,6 +122,10 @@ export interface BackendState {
   pixels_per_meter: number;
   overlay_radius_scale: number;
   resolution: [number, number];
+  // Game logic and session data
+  game?: GameState_Data;
+  session?: SessionData;
+  drill?: DrillData;
 }
 
 interface WebSocketContextType {
@@ -86,6 +140,14 @@ interface WebSocketContextType {
   // Test shot
   triggerTestShot: () => void;
   isTestShotActive: boolean;
+  // Game and session data
+  gameData: GameState_Data | null;
+  sessionData: SessionData | null;
+  drillData: DrillData | null;
+  setHoleDistance: (distance_m: number) => Promise<void>;
+  resetSession: () => Promise<void>;
+  startDrill: (drillType: DrillType) => Promise<void>;
+  stopDrill: () => Promise<void>;
 }
 
 // --- Test Shot Generator ---
@@ -342,6 +404,11 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     ? { x: lastJsonMessage.ball.x_px, y: lastJsonMessage.ball.y_px } 
     : (lastJsonMessage?.virtual_ball ? { x: lastJsonMessage.virtual_ball.x, y: lastJsonMessage.virtual_ball.y } : null);
   const pixelsPerMeter = lastJsonMessage?.pixels_per_meter || 1150;
+  
+  // Game and session data
+  const gameData = lastJsonMessage?.game || null;
+  const sessionData = lastJsonMessage?.session || null;
+  const drillData = lastJsonMessage?.drill || null;
 
   const sendReset = () => {
     // Also cancel test shot on reset
@@ -350,6 +417,63 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     }
     sendMessage(JSON.stringify({ type: 'reset' }));
   };
+  
+  // API functions for game management
+  const setHoleDistance = useCallback(async (distance_m: number) => {
+    try {
+      const response = await fetch('http://localhost:8000/api/game/hole', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ distance_m })
+      });
+      if (!response.ok) {
+        throw new Error('Failed to set hole distance');
+      }
+    } catch (error) {
+      console.error('Error setting hole distance:', error);
+    }
+  }, []);
+  
+  const resetSession = useCallback(async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/session/reset', {
+        method: 'POST'
+      });
+      if (!response.ok) {
+        throw new Error('Failed to reset session');
+      }
+    } catch (error) {
+      console.error('Error resetting session:', error);
+    }
+  }, []);
+  
+  const startDrill = useCallback(async (drillType: DrillType) => {
+    try {
+      const response = await fetch('http://localhost:8000/api/drill/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ drill_type: drillType })
+      });
+      if (!response.ok) {
+        throw new Error('Failed to start drill');
+      }
+    } catch (error) {
+      console.error('Error starting drill:', error);
+    }
+  }, []);
+  
+  const stopDrill = useCallback(async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/drill/stop', {
+        method: 'POST'
+      });
+      if (!response.ok) {
+        throw new Error('Failed to stop drill');
+      }
+    } catch (error) {
+      console.error('Error stopping drill:', error);
+    }
+  }, []);
 
   const value: WebSocketContextType = {
     readyState,
@@ -361,6 +485,14 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     sendReset,
     triggerTestShot,
     isTestShotActive: testShot?.active || false,
+    // Game and session
+    gameData,
+    sessionData,
+    drillData,
+    setHoleDistance,
+    resetSession,
+    startDrill,
+    stopDrill,
   };
 
   return (
