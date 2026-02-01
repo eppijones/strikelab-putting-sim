@@ -47,7 +47,7 @@ class TrackerSettings:
     motion_confirm_frames: int = 2
     stopped_velocity_threshold: float = 50.0
     stopped_confirm_frames: int = 10
-    cooldown_duration_ms: int = 500
+    cooldown_duration_ms: int = 2000
     idle_ema_alpha: float = 0.05
     # Motion direction filter - prevents false triggers from putter swing/hand
     valid_motion_angle_deg: float = 45.0  # Accept motion within +/- this angle from forward

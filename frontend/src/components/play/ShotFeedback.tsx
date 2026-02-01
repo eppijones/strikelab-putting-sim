@@ -1,8 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { usePuttingState } from '../../contexts/WebSocketContext';
 import { motion, AnimatePresence } from 'framer-motion';
-import confetti from 'canvas-confetti';
-
 export const ShotFeedback: React.FC = () => {
   const { lastJsonMessage, gameState } = usePuttingState();
   const [showResult, setShowResult] = useState<string | null>(null);
@@ -14,20 +12,8 @@ export const ShotFeedback: React.FC = () => {
     // Ideally, backend calculates 'Result' (Hole In, Miss Short, Miss Left, etc.)
     
     if (gameState === 'STOPPED' && lastJsonMessage?.shot) {
-      // Simple feedback
-      setShowResult("STOPPED");
-      
-      // Fire confetti for fun
-      confetti({
-        particleCount: 100,
-        spread: 70,
-        origin: { y: 0.6 },
-        colors: ['#22c55e', '#06b6d4', '#ffffff']
-      });
-
-      // Clear after 3s
-      const timer = setTimeout(() => setShowResult(null), 3000);
-      return () => clearTimeout(timer);
+      // Logic removed as per user request to hide "STOPPED" text
+      setShowResult(null);
     } else if (gameState === 'ARMED') {
       setShowResult(null);
     }

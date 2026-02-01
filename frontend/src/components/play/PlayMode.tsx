@@ -4,6 +4,7 @@ import { StatsHUD } from './StatsHUD';
 import { ShotFeedback } from './ShotFeedback';
 import { StudioBackground } from './StudioBackground';
 import { NeuralFeedback } from './NeuralFeedback';
+import { ReadyIndicator } from './ReadyIndicator';
 
 export const PlayMode: React.FC = () => {
   return (
@@ -13,6 +14,7 @@ export const PlayMode: React.FC = () => {
       <StatsHUD />
       <NeuralFeedback />
       <ShotFeedback />
+      <ReadyIndicator />
     </div>
   );
 };

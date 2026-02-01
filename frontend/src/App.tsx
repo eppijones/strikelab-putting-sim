@@ -7,14 +7,13 @@ import { LabMode } from './components/lab/LabMode';
 import { AnimatePresence, motion } from 'framer-motion';
 
 const AppContent: React.FC = () => {
-  const [mode, setMode] = useState<AppMode>(() => {
-    const saved = localStorage.getItem('strikeLabMode');
-    return (saved === 'PLAY' || saved === 'LAB') ? saved : 'PLAY';
-  });
+  const [mode, setMode] = useState<AppMode>('PLAY');
 
+  /* Remove persistence to ensure we always start in PLAY
   useEffect(() => {
     localStorage.setItem('strikeLabMode', mode);
   }, [mode]);
+  */
 
   return (
     <div className="relative w-full h-screen overflow-hidden bg-sl-dark text-white selection:bg-sl-green selection:text-sl-dark">

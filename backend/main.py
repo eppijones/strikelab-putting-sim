@@ -567,10 +567,18 @@ app = FastAPI(
 )
 
 # Serve static files
-frontend_path = Path(__file__).parent.parent / "frontend"
+frontend_path = Path(__file__).parent.parent / "frontend" / "dist"
+if not frontend_path.exists():
+    # Fallback to legacy or raw frontend if dist doesn't exist
+    frontend_path = Path(__file__).parent.parent / "frontend_legacy"
+
 if frontend_path.exists():
     app.mount("/static", StaticFiles(directory=str(frontend_path)), name="static")
-
+else:
+    # Try the new source folder just in case (though it won't work well without build)
+    frontend_path = Path(__file__).parent.parent / "frontend"
+    if frontend_path.exists():
+        app.mount("/static", StaticFiles(directory=str(frontend_path)), name="static")
 
 @app.get("/")
 async def root():
@@ -578,7 +586,7 @@ async def root():
     index_path = frontend_path / "index.html"
     if index_path.exists():
         return HTMLResponse(content=index_path.read_text())
-    return HTMLResponse(content="<h1>StrikeLab Putting Sim</h1><p>Frontend not found</p>")
+    return HTMLResponse(content="<h1>StrikeLab Putting Sim</h1><p>Frontend not found. Run 'npm run build' in frontend/</p>")
 
 
 @app.get("/api/video")

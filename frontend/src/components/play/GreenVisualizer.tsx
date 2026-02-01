@@ -139,6 +139,23 @@ export const GreenVisualizer: React.FC = () => {
            ctx.arc(bx, by, ballRadiusScreen * 3, 0, Math.PI * 2);
            ctx.fill();
         }
+      } else if (gameState === 'ARMED') {
+         // Draw ghost ball at origin (Ready State)
+         const bx = transformX(400); // Center Y -> ScreenX (assuming 800w center)
+         const by = transformY(0);   // Bottom X -> ScreenY (Tee)
+         
+         const ballRadiusM = 0.04267 / 2;
+         const ballRadiusScreen = ballRadiusM * scale;
+         
+         ctx.beginPath();
+         ctx.arc(bx, by, ballRadiusScreen, 0, Math.PI * 2);
+         ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+         ctx.fill();
+         ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+         ctx.setLineDash([2, 2]);
+         ctx.lineWidth = 1;
+         ctx.stroke();
+         ctx.setLineDash([]);
       }
 
       requestAnimationFrame(render);
