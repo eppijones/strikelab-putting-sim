@@ -106,7 +106,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     shouldReconnect: () => true,
     reconnectInterval: 3000,
     reconnectAttempts: 20,
-    share: true,
+    share: false, // share: true can cause loops in strict mode or single provider setups
   });
 
   const isConnected = readyState === ReadyState.OPEN;

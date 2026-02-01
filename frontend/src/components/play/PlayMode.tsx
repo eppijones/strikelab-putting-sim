@@ -1,15 +1,17 @@
 import React from 'react';
-import { GreenVisualizer } from './GreenVisualizer';
+import { Green3D } from './Green3D';
 import { StatsHUD } from './StatsHUD';
 import { ShotFeedback } from './ShotFeedback';
-import { AmbientBackground } from '../shared/AmbientBackground';
+import { StudioBackground } from './StudioBackground';
+import { NeuralFeedback } from './NeuralFeedback';
 
 export const PlayMode: React.FC = () => {
   return (
     <div className="relative w-full h-full">
-      <AmbientBackground />
-      <GreenVisualizer />
+      <StudioBackground />
+      <Green3D />
       <StatsHUD />
+      <NeuralFeedback />
       <ShotFeedback />
     </div>
   );
