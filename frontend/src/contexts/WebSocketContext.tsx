@@ -126,6 +126,14 @@ export interface SessionData {
   consistency: ConsistencyMetrics;
   tendencies: TendencyAnalysis;
   miss_distribution: MissDistribution;
+  user_id?: number | null;
+}
+
+export interface User {
+  id: number;
+  name: string;
+  handicap: number;
+  created_at: string;
 }
 
 export type DrillType = 'none' | 'distance_control' | 'ladder_drill';
@@ -191,6 +199,13 @@ interface WebSocketContextType {
   stopDrill: () => Promise<void>;
   showDistance: boolean;
   setShowDistance: (show: boolean) => void;
+  // User Management
+  users: User[];
+  refreshUsers: () => Promise<void>;
+  createUser: (name: string, handicap: number) => Promise<void>;
+  deleteUser: (userId: number) => Promise<void>;
+  resetUserData: (userId: number) => Promise<{ success: boolean; shots_deleted?: number; sessions_deleted?: number }>;
+  selectUser: (userId: number | null) => Promise<void>;
 }
 
 // --- Test Shot Generator ---
@@ -295,6 +310,9 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
 
   // --- UI State ---
   const [showDistance, setShowDistance] = useState(true);
+  
+  // --- User State ---
+  const [users, setUsers] = useState<User[]>([]);
 
   // --- Test Shot State ---
   const [testShot, setTestShot] = useState<TestShotState | null>(null);
@@ -537,6 +555,89 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     }
   }, []);
 
+  // --- User Management API ---
+  const refreshUsers = useCallback(async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/users');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          setUsers(data.users);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching users:', error);
+    }
+  }, []);
+
+  const createUser = useCallback(async (name: string, handicap: number) => {
+    try {
+      const response = await fetch('http://localhost:8000/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, handicap })
+      });
+      if (response.ok) {
+        await refreshUsers();
+      }
+    } catch (error) {
+      console.error('Error creating user:', error);
+    }
+  }, [refreshUsers]);
+
+  const deleteUser = useCallback(async (userId: number) => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/users/${userId}`, {
+        method: 'DELETE'
+      });
+      if (response.ok) {
+        await refreshUsers();
+      }
+    } catch (error) {
+      console.error('Error deleting user:', error);
+    }
+  }, [refreshUsers]);
+
+  const resetUserData = useCallback(async (userId: number): Promise<{ success: boolean; shots_deleted?: number; sessions_deleted?: number }> => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/users/${userId}/reset`, {
+        method: 'POST'
+      });
+      if (response.ok) {
+        const data = await response.json();
+        return { 
+          success: true, 
+          shots_deleted: data.shots_deleted, 
+          sessions_deleted: data.sessions_deleted 
+        };
+      }
+      return { success: false };
+    } catch (error) {
+      console.error('Error resetting user data:', error);
+      return { success: false };
+    }
+  }, []);
+
+  const selectUser = useCallback(async (userId: number | null) => {
+    try {
+      const response = await fetch('http://localhost:8000/api/session/user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId })
+      });
+      if (!response.ok) {
+        throw new Error('Failed to select user');
+      }
+    } catch (error) {
+      console.error('Error selecting user:', error);
+    }
+  }, []);
+
+  // Initial load of users
+  useEffect(() => {
+    refreshUsers();
+  }, [refreshUsers]);
+
   const value: WebSocketContextType = {
     readyState,
     lastJsonMessage,
@@ -557,6 +658,13 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     stopDrill,
     showDistance,
     setShowDistance,
+    // User Management
+    users,
+    refreshUsers,
+    createUser,
+    deleteUser,
+    resetUserData,
+    selectUser,
   };
 
   return (

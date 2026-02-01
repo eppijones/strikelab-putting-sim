@@ -74,7 +74,7 @@ export const SettingsMenu: React.FC<SettingsMenuProps> = ({ className = '' }) =>
     }
   };
   
-  const presetDistances = [1, 2, 3, 4, 5, 6, 8, 10];
+  const presetDistances = [2, 3, 5, 8, 10, 15, 20, 25];
   
   return (
     <>
@@ -84,11 +84,11 @@ export const SettingsMenu: React.FC<SettingsMenuProps> = ({ className = '' }) =>
           setIsOpen(!isOpen);
           playSound('click');
         }}
-        className={`p-3 rounded-full bg-white/10 backdrop-blur-md border border-white/20 
-                    hover:bg-white/20 transition-all duration-200 ${className}`}
+        className={`p-3 rounded-full bg-white/80 backdrop-blur-md border border-slate-200 
+                    hover:bg-white transition-all duration-200 shadow-sm ${className}`}
         title="Settings"
       >
-        <Settings size={20} className="text-white/80" />
+        <Settings size={20} className="text-slate-600" />
       </button>
       
       {/* Settings panel */}
@@ -145,9 +145,9 @@ export const SettingsMenu: React.FC<SettingsMenuProps> = ({ className = '' }) =>
                   {/* Slider */}
                   <input
                     type="range"
-                    min="0.5"
-                    max="10"
-                    step="0.5"
+                    min="1"
+                    max="25"
+                    step="0.1"
                     value={localDistance}
                     onChange={(e) => handleDistanceChange(parseFloat(e.target.value))}
                     onMouseUp={handleDistanceCommit}
@@ -193,7 +193,7 @@ export const SettingsMenu: React.FC<SettingsMenuProps> = ({ className = '' }) =>
                   </div>
 
                   <div className="flex items-center justify-between mb-4">
-                    <span className="text-white/70">Show Live Distance</span>
+                    <span className="text-white/70">Show Distance Ruler</span>
                     <button
                       onClick={() => {
                         setShowDistance(!showDistance);

@@ -76,24 +76,26 @@ const AppContent: React.FC = () => {
   const [showAnalytics, setShowAnalytics] = useState(false);
 
   return (
-    <div className="relative w-full h-screen overflow-hidden bg-sl-dark text-white selection:bg-sl-green selection:text-sl-dark">
+    <div className="fixed inset-0 w-full h-full overflow-hidden bg-[#F2F0EB] text-white selection:bg-sl-green selection:text-sl-dark">
       <GameSoundManager />
       <ConnectionStatus />
-      <ModeToggle mode={mode} setMode={setMode} />
-      
       {/* Top right controls */}
-      <div className="fixed top-4 right-4 z-30 flex gap-2">
+      <div className="fixed top-4 right-4 z-50 flex items-center gap-3">
         {/* Analytics button */}
         <button
           onClick={() => setShowAnalytics(true)}
-          className="p-3 rounded-full bg-white/10 backdrop-blur-md border border-white/20 
-                    hover:bg-white/20 transition-all duration-200"
+          className="p-3 rounded-full bg-white/80 backdrop-blur-md border border-slate-200 
+                    hover:bg-white transition-all duration-200 shadow-sm"
           title="Analytics"
         >
-          <BarChart3 size={20} className="text-white/80" />
+          <BarChart3 size={20} className="text-slate-600" />
         </button>
         
         <SettingsMenu />
+        
+        <div className="w-px h-8 bg-slate-200 mx-1" />
+        
+        <ModeToggle mode={mode} setMode={setMode} />
       </div>
       
       {/* Analytics Panel */}
@@ -102,9 +104,9 @@ const AppContent: React.FC = () => {
       <AnimatePresence mode="wait">
         <motion.div
           key={mode}
-          initial={{ opacity: 0, scale: 0.98 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 1.02 }}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
           transition={{ duration: 0.3, ease: "easeInOut" }}
           className="w-full h-full"
         >

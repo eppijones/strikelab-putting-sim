@@ -47,7 +47,7 @@ export const GreenVisualizer: React.FC = () => {
     const transformX = (camY: number) => {
       // Center camY (0..800) to screen center
       const camCenterY = camHeight / 2;
-      const offsetM = (camY - camCenterY) / pixelsPerMeter;
+      const offsetM = (camCenterY - camY) / pixelsPerMeter;
       return (canvas.width / 2) + (offsetM * scale);
     };
 

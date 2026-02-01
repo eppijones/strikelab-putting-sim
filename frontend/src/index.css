@@ -27,8 +27,15 @@
 }
 
 @layer base {
+  html {
+    @apply h-full w-full m-0 p-0 bg-nordic-paper;
+  }
   body {
-    @apply bg-midnight-surface text-white font-sans antialiased overflow-hidden;
+    @apply h-full w-full m-0 p-0 bg-nordic-paper text-white font-sans antialiased overflow-hidden;
+  }
+  #root {
+    @apply h-full w-full m-0 p-0;
+    isolation: isolate;
   }
 }
 

@@ -14,13 +14,11 @@ export const ReadyIndicator: React.FC = () => {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 10, scale: 0.95 }}
           transition={{ type: "spring", stiffness: 300, damping: 20 }}
-          className="absolute bottom-[20%] left-1/2 -translate-x-1/2 z-10"
+          className="absolute bottom-[10%] left-[49.7%] -translate-x-1/2 z-10 flex flex-col items-center"
         >
-          <div className="bg-nordic-sage text-white text-xs font-bold px-6 py-2 rounded-full uppercase tracking-[0.2em] shadow-lg animate-pulse border border-white/20 backdrop-blur-sm">
+          <div className="bg-white/60 backdrop-blur-[16px] text-nordic-forest text-sm font-bold px-8 py-3 rounded-[24px] uppercase tracking-[0.2em] shadow-glass animate-pulse border border-white/80">
             Ready for Shot
           </div>
-          {/* Optional decorative line pointing down to ball */}
-          <div className="w-[1px] h-8 bg-gradient-to-b from-nordic-sage/50 to-transparent mx-auto mt-1" />
         </motion.div>
       )}
     </AnimatePresence>

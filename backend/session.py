@@ -44,6 +44,8 @@ class ShotRecord:
     distance_to_hole_m: float
     lateral_miss_m: float
     depth_miss_m: float
+    user_id: Optional[int] = None
+    id: Optional[int] = None
     
     @property
     def is_made(self) -> bool:
@@ -182,7 +184,22 @@ class SessionManager:
         self.shots: List[ShotRecord] = []
         self._current_streak = 0
         self._best_streak = 0
+        self.current_user_id: Optional[int] = None
     
+    def set_user(self, user_id: Optional[int]):
+        """Set the current user for the session."""
+        if self.current_user_id != user_id:
+            self.current_user_id = user_id
+            # Optionally reset session or start a new one when user changes
+            # For now, let's just log it and maybe start a new session logic if needed
+            # But simpler to just update the user_id for future shots
+            logger.info(f"Session user set to: {user_id}")
+            # If we want to segregate sessions by user, we should reset here.
+            # Let's reset to keep stats clean for the new user.
+            self.reset()
+            # Restore the user_id after reset (since reset clears it via init logic if we were re-initing, but here reset just clears data)
+            self.current_user_id = user_id
+
     def record_shot(self, analysis: ShotAnalysis, shot_data: dict, target_distance_m: float) -> ShotRecord:
         """
         Record a completed shot.
@@ -204,7 +221,8 @@ class SessionManager:
             result=analysis.result,
             distance_to_hole_m=analysis.distance_to_hole_m,
             lateral_miss_m=analysis.lateral_miss_m,
-            depth_miss_m=analysis.depth_miss_m
+            depth_miss_m=analysis.depth_miss_m,
+            user_id=self.current_user_id
         )
         
         self.shots.append(record)
@@ -221,7 +239,7 @@ class SessionManager:
         db = _get_db()
         if db:
             try:
-                db.save_shot(
+                shot_id = db.save_shot(
                     session_id=self.session_id,
                     speed_m_s=record.speed_m_s,
                     distance_m=record.distance_m,
@@ -230,15 +248,17 @@ class SessionManager:
                     result=record.result,
                     distance_to_hole_m=record.distance_to_hole_m,
                     lateral_miss_m=record.lateral_miss_m,
-                    depth_miss_m=record.depth_miss_m
+                    depth_miss_m=record.depth_miss_m,
+                    user_id=self.current_user_id
                 )
+                record.id = shot_id
             except Exception as e:
                 logger.error(f"Failed to persist shot to database: {e}")
         
         logger.info(
             f"Shot recorded: {analysis.result.value}, "
             f"total={len(self.shots)}, made={self.get_putts_made()}, "
-            f"streak={self._current_streak}"
+            f"streak={self._current_streak}, user={self.current_user_id}, id={record.id}"
         )
         
         return record
@@ -498,11 +518,11 @@ class SessionManager:
         # Record new session start
         if db:
             try:
-                db.start_session(self.session_id)
+                db.start_session(self.session_id, user_id=self.current_user_id)
             except Exception as e:
                 logger.error(f"Failed to start session in database: {e}")
         
-        logger.info("Session reset")
+        logger.info(f"Session reset (user_id={self.current_user_id})")
     
     def get_state_for_websocket(self) -> dict:
         """
@@ -515,6 +535,7 @@ class SessionManager:
         
         return {
             "session_id": self.session_id,
+            "user_id": self.current_user_id,
             "duration_s": round(time.time() - self.start_time, 1),
             "total_putts": stats.total_putts,
             "putts_made": stats.putts_made,

@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StrikeLab - Putting Sim</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header id="header">
+            <h1>StrikeLab – Putting Sim</h1>
+            <div id="connection-status" class="status disconnected">Disconnected</div>
+        </header>
+
+        <!-- Main canvas area -->
+        <main id="main">
+            <div id="canvas-container">
+                <img id="video-feed" src="/api/video" alt="Camera feed" style="display: none;">
+                <canvas id="ball-canvas"></canvas>
+                <div id="overlay">
+                    <div id="state-badge" class="state-armed">ARMED</div>
+                </div>
+            </div>
+            <div id="view-toggle">
+                <label>
+                    <input type="checkbox" id="show-video" checked> Show camera feed
+                </label>
+            </div>
+        </main>
+
+        <!-- Metrics panel -->
+        <aside id="metrics-panel">
+            <section class="metric-group">
+                <h3>Shot Data</h3>
+                <div class="metric">
+                    <span class="label">Speed:</span>
+                    <span id="speed-value" class="value">--</span>
+                    <span class="unit">m/s</span>
+                </div>
+                <div class="metric">
+                    <span class="label">Distance:</span>
+                    <span id="shot-distance" class="value">--</span>
+                    <span class="unit">cm</span>
+                </div>
+                <div class="metric">
+                    <span class="label">Direction:</span>
+                    <span id="direction-value" class="value">--</span>
+                    <span class="unit">°</span>
+                </div>
+            </section>
+
+            <section class="metric-group">
+                <h3>Performance</h3>
+                <div class="metric">
+                    <span class="label">CAP:</span>
+                    <span id="cap-fps" class="value">--</span>
+                    <span class="unit">fps</span>
+                </div>
+                <div class="metric">
+                    <span class="label">PROC:</span>
+                    <span id="proc-fps" class="value">--</span>
+                    <span class="unit">fps</span>
+                </div>
+                <div class="metric">
+                    <span class="label">Latency:</span>
+                    <span id="proc-latency" class="value">--</span>
+                    <span class="unit">ms</span>
+                </div>
+            </section>
+
+            <section class="metric-group">
+                <h3>Tracker</h3>
+                <div class="metric">
+                    <span class="label">Status:</span>
+                    <span id="calibration-status" class="value">Waiting...</span>
+                </div>
+                <div class="metric">
+                    <span class="label">Ball:</span>
+                    <span id="ball-position" class="value">--</span>
+                </div>
+                <div class="metric">
+                    <span class="label">Jitter:</span>
+                    <span id="idle-jitter" class="value">--</span>
+                    <span class="unit">px</span>
+                </div>
+                <button id="reset-btn" class="btn btn-secondary">Reset Tracker</button>
+            </section>
+        </aside>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

@@ -22,14 +22,14 @@ export const ModeToggle: React.FC<ModeToggleProps> = ({ mode, setMode }) => {
   }, [mode, setMode]);
 
   return (
-    <div className="fixed top-4 right-4 z-50 flex items-center gap-2 bg-sl-panel backdrop-blur-md rounded-full p-1 border border-white/10 shadow-lg">
+    <div className="flex items-center gap-2 bg-white/80 backdrop-blur-md rounded-full p-1 border border-slate-200 shadow-sm">
       <button
         onClick={() => setMode('PLAY')}
         className={clsx(
           "flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all duration-300",
           mode === 'PLAY' 
-            ? "bg-sl-green text-sl-dark shadow-[0_0_15px_rgba(34,197,94,0.4)]" 
-            : "text-gray-400 hover:text-white hover:bg-white/5"
+            ? "bg-sl-green text-sl-dark shadow-md" 
+            : "text-slate-500 hover:text-slate-900 hover:bg-black/5"
         )}
       >
         <Gamepad2 size={16} />
@@ -41,8 +41,8 @@ export const ModeToggle: React.FC<ModeToggleProps> = ({ mode, setMode }) => {
         className={clsx(
           "flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all duration-300",
           mode === 'LAB' 
-            ? "bg-sl-cyan text-sl-dark shadow-[0_0_15px_rgba(6,182,212,0.4)]" 
-            : "text-gray-400 hover:text-white hover:bg-white/5"
+            ? "bg-sl-cyan text-sl-dark shadow-md" 
+            : "text-slate-500 hover:text-slate-900 hover:bg-black/5"
         )}
       >
         <Beaker size={16} />

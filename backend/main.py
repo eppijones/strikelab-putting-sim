@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 from typing import Optional, Set
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -865,10 +865,10 @@ async def set_hole_distance(data: dict):
             }, status_code=400)
         
         # Validate range
-        if not 0.5 <= distance_m <= 15.0:
+        if not 0.5 <= distance_m <= 25.0:
             return JSONResponse({
                 "success": False,
-                "error": "distance_m must be between 0.5 and 15.0 meters"
+                "error": "distance_m must be between 0.5 and 25.0 meters"
             }, status_code=400)
         
         sim.game_logic.set_hole_distance(distance_m)
@@ -907,6 +907,121 @@ async def get_last_shot_result():
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+# ============= User Management Endpoints =============
+
+@app.get("/api/users")
+async def get_users():
+    """Get all users."""
+    try:
+        from .database import get_database
+        db = get_database()
+        users = db.get_users()
+        return JSONResponse({
+            "success": True,
+            "users": [asdict(u) for u in users]
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/users")
+async def create_user(data: dict):
+    """
+    Create a new user.
+    
+    Expected data:
+    {
+        "name": str,
+        "handicap": float (optional, default 0.0)
+    }
+    """
+    try:
+        from .database import get_database
+        db = get_database()
+        
+        name = data.get("name")
+        handicap = data.get("handicap", 0.0)
+        
+        if not name:
+            return JSONResponse({
+                "success": False,
+                "error": "name is required"
+            }, status_code=400)
+            
+        user_id = db.create_user(name, handicap)
+        
+        return JSONResponse({
+            "success": True,
+            "user": {
+                "id": user_id,
+                "name": name,
+                "handicap": handicap
+            }
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.delete("/api/users/{user_id}")
+async def delete_user(user_id: int):
+    """Delete a user."""
+    try:
+        from .database import get_database
+        db = get_database()
+        
+        db.delete_user(user_id)
+        
+        # If current session user is this user, clear it
+        sim = get_app_instance()
+        if sim.session_manager.current_user_id == user_id:
+            sim.session_manager.set_user(None)
+            
+        return JSONResponse({
+            "success": True,
+            "message": f"User {user_id} deleted"
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/users/{user_id}/reset")
+async def reset_user_data(user_id: int):
+    """
+    Reset all data for a user without deleting the user account.
+    This clears all shots and sessions for the user.
+    """
+    try:
+        from .database import get_database
+        db = get_database()
+        
+        # Verify user exists
+        users = db.get_users()
+        user_exists = any(u.id == user_id for u in users)
+        if not user_exists:
+            return JSONResponse({
+                "success": False,
+                "error": f"User {user_id} not found"
+            }, status_code=404)
+        
+        # Reset the data
+        result = db.reset_user_data(user_id)
+        
+        # If current session user is this user, reset the session too
+        sim = get_app_instance()
+        if sim.session_manager.current_user_id == user_id:
+            sim.session_manager.reset()
+            
+        return JSONResponse({
+            "success": True,
+            "message": f"Data reset for user {user_id}",
+            "shots_deleted": result["shots_deleted"],
+            "sessions_deleted": result["sessions_deleted"]
+        })
+    except Exception as e:
+        logger.error(f"Failed to reset user data: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # ============= Session Endpoints =============
 
 @app.get("/api/session")
@@ -916,6 +1031,31 @@ async def get_session():
         sim = get_app_instance()
         return JSONResponse({
             "success": True,
+            **sim.session_manager.get_state_for_websocket()
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/session/user")
+async def set_session_user(data: dict):
+    """
+    Set the active user for the session.
+    
+    Expected data:
+    {
+        "user_id": int | null
+    }
+    """
+    try:
+        sim = get_app_instance()
+        user_id = data.get("user_id")
+        
+        sim.session_manager.set_user(user_id)
+        
+        return JSONResponse({
+            "success": True,
+            "user_id": user_id,
             **sim.session_manager.get_state_for_websocket()
         })
     except Exception as e:
@@ -1010,9 +1150,12 @@ async def get_session_history():
         
         return JSONResponse({
             "success": True,
+            "session_id": sim.session_manager.session_id,
             "total_shots": sim.session_manager.get_total_putts(),
             "shots": [
                 {
+                    "shot_number": idx + 1,  # 1-based shot number for this session
+                    "id": shot.id,  # Database ID
                     "timestamp": shot.timestamp,
                     "speed_m_s": round(shot.speed_m_s, 3),
                     "distance_m": round(shot.distance_m, 3),
@@ -1022,10 +1165,74 @@ async def get_session_history():
                     "is_made": shot.is_made,
                     "distance_to_hole_m": round(shot.distance_to_hole_m, 3)
                 }
-                for shot in shots
+                for idx, shot in enumerate(shots)
             ]
         })
     except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/users/{user_id}/history")
+async def get_user_shot_history(user_id: int, limit: int = 100):
+    """
+    Get shot history for a specific user from the database.
+    This returns all historical shots, not just the current session.
+    """
+    try:
+        from .database import get_database
+        db = get_database()
+        
+        # Verify user exists
+        users = db.get_users()
+        user = next((u for u in users if u.id == user_id), None)
+        if not user:
+            return JSONResponse({
+                "success": False,
+                "error": f"User {user_id} not found"
+            }, status_code=404)
+        
+        # Get shots from database
+        shots = db.get_shots(user_id=user_id, limit=limit)
+        
+        # Group shots by session for shot numbering
+        shots_by_session: dict = {}
+        for shot in reversed(shots):  # Reverse to process chronologically
+            session_id = shot.session_id
+            if session_id not in shots_by_session:
+                shots_by_session[session_id] = []
+            shots_by_session[session_id].append(shot)
+        
+        # Build response with session-based shot numbers
+        result_shots = []
+        for shot in shots:  # Already in reverse chronological order
+            session_shots = shots_by_session.get(shot.session_id, [])
+            # Find shot index within session (0-based)
+            shot_idx = next((i for i, s in enumerate(session_shots) if s.id == shot.id), 0)
+            
+            result_shots.append({
+                "shot_number": shot_idx + 1,  # 1-based within session
+                "id": shot.id,
+                "session_id": shot.session_id,
+                "timestamp": shot.timestamp,
+                "speed_m_s": round(shot.speed_m_s, 3),
+                "distance_m": round(shot.distance_m, 3),
+                "direction_deg": round(shot.direction_deg, 2),
+                "target_distance_m": round(shot.target_distance_m, 2),
+                "result": shot.result,
+                "is_made": shot.is_made,
+                "distance_to_hole_m": round(shot.distance_to_hole_m, 3) if shot.distance_to_hole_m else None
+            })
+        
+        return JSONResponse({
+            "success": True,
+            "user_id": user_id,
+            "user_name": user.name,
+            "total_shots": len(shots),
+            "sessions_count": len(shots_by_session),
+            "shots": result_shots
+        })
+    except Exception as e:
+        logger.error(f"Failed to get user shot history: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
@@ -1133,6 +1340,29 @@ async def set_green_speed(data: dict):
 
 # ============= Database/Analytics Endpoints =============
 
+@app.delete("/api/shots/{shot_id}")
+async def delete_shot(shot_id: int):
+    """Delete a specific shot."""
+    try:
+        from .database import get_database
+        db = get_database()
+        
+        success = db.delete_shot(shot_id)
+        
+        if success:
+            return JSONResponse({
+                "success": True,
+                "message": f"Shot {shot_id} deleted"
+            })
+        else:
+            return JSONResponse({
+                "success": False,
+                "error": "Shot not found"
+            }, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/api/stats/all-time")
 async def get_all_time_stats():
     """Get all-time putting statistics from the database."""
@@ -1147,6 +1377,47 @@ async def get_all_time_stats():
         })
     except Exception as e:
         logger.error(f"Failed to get all-time stats: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/users/{user_id}/stats")
+async def get_user_stats(user_id: int):
+    """
+    Get all-time putting statistics for a specific user from the database.
+    This includes historical data across all sessions.
+    """
+    try:
+        from .database import get_database
+        db = get_database()
+        
+        # Verify user exists
+        users = db.get_users()
+        user = next((u for u in users if u.id == user_id), None)
+        if not user:
+            return JSONResponse({
+                "success": False,
+                "error": f"User {user_id} not found"
+            }, status_code=404)
+        
+        # Get user stats from database
+        stats = db.get_stats(days=0, user_id=user_id)  # All time for this user
+        shots = db.get_shots(user_id=user_id, limit=1000)  # Get all shots for user
+        trend = db.get_recent_trend(n_shots=50, user_id=user_id)
+        
+        return JSONResponse({
+            "success": True,
+            "user": {
+                "id": user.id,
+                "name": user.name,
+                "handicap": user.handicap,
+                "created_at": user.created_at
+            },
+            "stats": stats,
+            "total_shots_in_db": len(shots),
+            "trend": trend
+        })
+    except Exception as e:
+        logger.error(f"Failed to get user stats: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 

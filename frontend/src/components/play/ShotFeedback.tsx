@@ -1,70 +1,64 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { usePuttingState, type ShotResultType } from '../../contexts/WebSocketContext';
 import { motion, AnimatePresence } from 'framer-motion';
+import { CheckCircle2, AlertCircle, ArrowDown, ArrowUp, ArrowLeft, ArrowRight, Flag } from 'lucide-react';
 
 interface FeedbackDisplay {
   text: string;
   subtext?: string;
   color: string;
-  bgColor: string;
-  icon: string;
+  icon: React.ReactNode;
 }
 
 const getFeedbackDisplay = (result: ShotResultType, missDescription: string): FeedbackDisplay => {
   switch (result) {
     case 'made':
       return {
-        text: 'MADE IT!',
-        icon: '⛳',
-        color: 'text-emerald-400',
-        bgColor: 'bg-emerald-500/20'
+        text: 'PERFECT',
+        subtext: 'Great putt!',
+        icon: <Flag className="w-8 h-8" />,
+        color: 'text-emerald-600',
       };
     case 'lip_out':
       return {
         text: 'LIP OUT',
         subtext: 'So close!',
-        icon: '😮',
-        color: 'text-amber-400',
-        bgColor: 'bg-amber-500/20'
+        icon: <AlertCircle className="w-8 h-8" />,
+        color: 'text-amber-500',
       };
     case 'miss_short':
       return {
         text: 'SHORT',
         subtext: missDescription,
-        icon: '📏',
-        color: 'text-blue-400',
-        bgColor: 'bg-blue-500/20'
+        icon: <ArrowDown className="w-8 h-8" />,
+        color: 'text-blue-500',
       };
     case 'miss_long':
       return {
         text: 'LONG',
         subtext: missDescription,
-        icon: '🎯',
-        color: 'text-orange-400',
-        bgColor: 'bg-orange-500/20'
+        icon: <ArrowUp className="w-8 h-8" />,
+        color: 'text-orange-500',
       };
     case 'miss_left':
       return {
         text: 'MISS LEFT',
         subtext: missDescription,
-        icon: '⬅️',
-        color: 'text-purple-400',
-        bgColor: 'bg-purple-500/20'
+        icon: <ArrowLeft className="w-8 h-8" />,
+        color: 'text-rose-500',
       };
     case 'miss_right':
       return {
         text: 'MISS RIGHT',
         subtext: missDescription,
-        icon: '➡️',
-        color: 'text-rose-400',
-        bgColor: 'bg-rose-500/20'
+        icon: <ArrowRight className="w-8 h-8" />,
+        color: 'text-rose-500',
       };
     default:
       return {
         text: '',
-        icon: '',
+        icon: null,
         color: 'text-gray-400',
-        bgColor: 'bg-gray-500/20'
       };
   }
 };
@@ -94,16 +88,19 @@ export const ShotFeedback: React.FC = () => {
           clearTimeout(hideTimeoutRef.current);
         }
         
-        // Hide after 2.5 seconds
+        // Hide after 3 seconds
         hideTimeoutRef.current = setTimeout(() => {
           setShowFeedback(false);
-        }, 2500);
+        }, 3000);
       }
     }
     
-    // Clear feedback when returning to ARMED
+    // Clear feedback when returning to ARMED or READY
     if (gameState === 'ARMED') {
-      // Don't immediately clear - let it fade naturally
+      setShowFeedback(false);
+      if (hideTimeoutRef.current) {
+        clearTimeout(hideTimeoutRef.current);
+      }
     }
     
     return () => {
@@ -117,30 +114,33 @@ export const ShotFeedback: React.FC = () => {
     <AnimatePresence>
       {showFeedback && feedback && feedback.text && (
         <motion.div
-          initial={{ scale: 0.5, opacity: 0, y: 20 }}
-          animate={{ scale: 1, opacity: 1, y: 0 }}
-          exit={{ scale: 0.8, opacity: 0, y: -20 }}
+          initial={{ scale: 0.9, opacity: 0, x: 20 }}
+          animate={{ scale: 1, opacity: 1, x: 0 }}
+          exit={{ scale: 0.95, opacity: 0, x: 20 }}
           transition={{ type: 'spring', stiffness: 300, damping: 25 }}
-          className="absolute top-1/3 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2"
+          className="absolute bottom-72 right-8 flex flex-col items-end z-50 pointer-events-none"
         >
-          {/* Main feedback card */}
-          <div className={`${feedback.bgColor} backdrop-blur-xl px-8 py-6 rounded-3xl border border-white/20 shadow-2xl`}>
-            {/* Icon */}
-            <div className="text-5xl text-center mb-2">
+          {/* Glass Card */}
+          <div className="bg-white/80 backdrop-blur-xl px-8 py-6 rounded-[24px] border border-white/60 shadow-glass flex flex-col items-center gap-3 min-w-[200px]">
+            
+            {/* Icon Circle */}
+            <div className={`p-3 rounded-full bg-white/50 shadow-sm ${feedback.color}`}>
               {feedback.icon}
             </div>
             
-            {/* Main text */}
-            <div className={`text-5xl font-black ${feedback.color} text-center tracking-tight`}>
-              {feedback.text}
-            </div>
-            
-            {/* Subtext */}
-            {feedback.subtext && (
-              <div className="text-lg text-white/70 text-center mt-2 font-medium">
-                {feedback.subtext}
+            <div className="flex flex-col items-center gap-0.5">
+              {/* Main text */}
+              <div className={`text-2xl font-black ${feedback.color} text-center tracking-tight font-sans`}>
+                {feedback.text}
               </div>
-            )}
+              
+              {/* Subtext */}
+              {feedback.subtext && (
+                <div className="text-sm text-nordic-forest/60 text-center font-medium font-mono">
+                  {feedback.subtext}
+                </div>
+              )}
+            </div>
           </div>
         </motion.div>
       )}
