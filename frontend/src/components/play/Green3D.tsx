@@ -1,113 +1,170 @@
 import React, { useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { PerspectiveCamera, Environment } from '@react-three/drei';
+import { PerspectiveCamera, Environment, Html } from '@react-three/drei';
 import { VirtualGreenPlane } from './VirtualGreenPlane';
 import { Ball3D } from './Ball3D';
+import { AimLine3D } from './AimLine3D';
 import { usePuttingState } from '../../contexts/WebSocketContext';
 import * as THREE from 'three';
 
 // --- Scene Components ---
 
+const DistanceIndicator: React.FC = () => {
+  const { ballPosition, pixelsPerMeter, gameData, showDistance } = usePuttingState();
+
+  if (!showDistance) return null;
+
+  // Ball position in meters (relative to start)
+  const ballZ = ballPosition ? ballPosition.x / pixelsPerMeter : 0;
+  
+  // Hole position (fixed at gameData distance)
+  const holeZ = gameData?.hole?.distance_m ?? 3;
+  
+  // Calculate remaining distance
+  const remainingDistM = Math.max(0, holeZ - ballZ);
+  const remainingDistCm = Math.round(remainingDistM * 100);
+
+  // Position label at midpoint, slightly elevated
+  // Ensure it doesn't jump around too much when ball is moving
+  const midZ = ballZ + (holeZ - ballZ) / 2;
+  
+  // Don't show if ball passed hole
+  if (ballZ > holeZ) return null;
+
+  return (
+    <Html position={[0, 0.2, midZ]} center zIndexRange={[100, 0]}>
+      <div className="px-3 py-1 bg-white/90 backdrop-blur-sm rounded-full shadow-lg border border-white/20 select-none">
+        <span className="text-sm font-bold text-slate-700 font-mono whitespace-nowrap">
+          {remainingDistCm} cm
+        </span>
+      </div>
+    </Html>
+  );
+};
+
 const DynamicCamera: React.FC = () => {
   const cameraRef = useRef<THREE.PerspectiveCamera>(null);
-  const { ballPosition, pixelsPerMeter, gameState } = usePuttingState();
+  const trackingStartTimeRef = useRef<number | null>(null);
+  const prevGameStateRef = useRef<string | null>(null);
+  const lookAtTargetRef = useRef(new THREE.Vector3(0, 0, 5));
+  const initialSpeedRef = useRef<number>(0);
+  const { ballPosition, pixelsPerMeter, gameState, gameData, lastJsonMessage } = usePuttingState();
 
-  // Mapping: Pixel -> Meter (See Plan)
-  // Backend X (pixels) -> 3D Z (Meters Forward)
-  // Backend Y (pixels) -> 3D X (Meters Left/Right)
-  // Origin offset needs to be calibrated. For now, assume 0,0 pixel is camera start.
+  // Camera configuration - FIXED CENTERED VIEW
+  // Camera stays at X=0, looking straight at the hole
+  // Ball appears wherever it is, aim line shows its path
+  const STATIC_DURATION = 0.5;
+  const CAMERA_HEIGHT = 2.5;
+  const CAMERA_DISTANCE_BEHIND = 3.0; // Further back for better view
   
-  // Actually, let's look at GreenVisualizer 2D mapping:
-  // camHeight/2 is center Y (Screen X).
-  // camWidth is top X (Screen Y).
-  // 3D coordinate system: Z- is forward (standard OpenGL), or Z+ is forward?
-  // Let's use:
-  // Z = Forward (Putt direction)
-  // X = Horizontal (Left/Right)
-  // Y = Up (Vertical)
+  const holeDistance = gameData?.hole?.distance_m ?? 3;
+  
+  // Fixed start position - always centered, looking straight at hole
+  const startPos = new THREE.Vector3(0, CAMERA_HEIGHT, -CAMERA_DISTANCE_BEHIND);
+  const startLookAt = new THREE.Vector3(0, 0, holeDistance);
 
   useFrame((_, delta) => {
     if (!cameraRef.current) return;
 
-    // Target position (Ball or Start)
-    let targetZ = 0;
-    let targetX = 0;
+    const isTracking = gameState === 'TRACKING' || gameState === 'VIRTUAL_ROLLING';
+    const wasTracking = prevGameStateRef.current === 'TRACKING' || prevGameStateRef.current === 'VIRTUAL_ROLLING';
+    const isArmed = gameState === 'ARMED';
+    const wasArmed = prevGameStateRef.current === 'ARMED';
 
+    // Get current ball position in meters (for follow during tracking)
+    let ballZ = 0;
     if (ballPosition) {
-        // Convert pixels to meters (approximate origin adjustment)
-        // Assuming X pixel increases as ball moves away from camera
-        const zMeters = ballPosition.x / pixelsPerMeter; 
-        
-        // Assuming Y pixel 400 is center (800w resolution? no 1280x800)
-        // If resolution is 1280x800, center Y is 400.
-        // Y pixel increases to the right? Or down? OpenCV usually Y is down.
-        // Let's assume standard image coords: 0,0 top-left.
-        // If camera is mounted overhead:
-        // We need to know orientation. 
-        // Let's stick to the 2D visualizer logic:
-        // transformX uses (camY - center) -> Screen X.
-        
-        // So:
-        const xMeters = (ballPosition.y - 400) / pixelsPerMeter; // 400 is half of 800 height
-        
-        targetZ = zMeters;
-        targetX = xMeters;
+      ballZ = ballPosition.x / pixelsPerMeter;
     }
 
-    // Camera State Logic
-    // Start: Behind the tee
-    const startPos = new THREE.Vector3(0, 1.2, -1.5); // 1.2m up, 1.5m behind
-    const lookAtOffset = new THREE.Vector3(0, 0, 2); // Look 2m ahead
-
-    if (gameState === 'TRACKING' || gameState === 'VIRTUAL_ROLLING') {
-       // Follow mode
-       const followPos = new THREE.Vector3(targetX, 0.8, targetZ - 1.0);
-       // Smooth lerp
-       cameraRef.current.position.lerp(followPos, delta * 2);
-       
-       const targetLook = new THREE.Vector3(targetX, 0, targetZ + 3);
-       // We can't lerp lookAt directly on the camera object easily without OrbitControls,
-       // but we can lerp a dummy target vector.
-       // For MVP, just updating position and lookAt frame-by-frame is okay.
-       cameraRef.current.lookAt(targetLook);
-    } else {
-       // Reset / Idle
-       cameraRef.current.position.lerp(startPos, delta * 2);
-       cameraRef.current.lookAt(lookAtOffset);
+    if (isTracking && !wasTracking) {
+      trackingStartTimeRef.current = performance.now() / 1000;
+      const speed = lastJsonMessage?.velocity?.speed_px_s || 
+                    (lastJsonMessage?.virtual_ball?.speed_m_s ? lastJsonMessage.virtual_ball.speed_m_s * pixelsPerMeter : 1500);
+      initialSpeedRef.current = Math.max(speed, 500);
     }
+
+    // Snap camera when transitioning to ARMED
+    if (isArmed && !wasArmed) {
+      trackingStartTimeRef.current = null;
+      cameraRef.current.position.copy(startPos);
+      lookAtTargetRef.current.copy(startLookAt);
+      cameraRef.current.lookAt(lookAtTargetRef.current);
+    }
+
+    prevGameStateRef.current = gameState;
+
+    if (isTracking && trackingStartTimeRef.current !== null) {
+      const elapsed = (performance.now() / 1000) - trackingStartTimeRef.current;
+
+      // During tracking: camera moves forward (Z only), stays centered (X=0)
+      // ALWAYS stay behind the ball - never pass it
+      // Camera Z position = ball Z - full distance behind (same as start distance)
+      const cameraZ = ballZ - CAMERA_DISTANCE_BEHIND;
+      const followPos = new THREE.Vector3(0, CAMERA_HEIGHT * 0.9, cameraZ);
+      const followLookAt = new THREE.Vector3(0, 0, Math.max(ballZ + 2, holeDistance));
+
+      let currentSpeed = 0;
+      if (lastJsonMessage?.velocity?.speed_px_s) {
+        currentSpeed = lastJsonMessage.velocity.speed_px_s;
+      } else if (lastJsonMessage?.virtual_ball?.speed_m_s) {
+        currentSpeed = lastJsonMessage.virtual_ball.speed_m_s * pixelsPerMeter;
+      }
+      
+      const speedRatio = Math.max(0.08, currentSpeed / initialSpeedRef.current);
+      const speedFactor = Math.sqrt(speedRatio);
+
+      if (elapsed < STATIC_DURATION) {
+        // Brief pause at start
+        cameraRef.current.lookAt(startLookAt);
+      } else {
+        const lerpSpeed = delta * 1.5 * speedFactor;
+        cameraRef.current.position.lerp(followPos, lerpSpeed);
+        lookAtTargetRef.current.lerp(followLookAt, lerpSpeed);
+        cameraRef.current.lookAt(lookAtTargetRef.current);
+      }
+    } else if (isArmed) {
+      // ARMED state: camera stays fixed centered
+      cameraRef.current.lookAt(startLookAt);
+    }
+    // STOPPED/COOLDOWN: camera stays where it stopped (do nothing)
   });
 
-  return <PerspectiveCamera ref={cameraRef} makeDefault fov={50} position={[0, 1.2, -1.5]} />;
+  return <PerspectiveCamera ref={cameraRef} makeDefault fov={50} position={[0, 2.5, -3.0]} />;
 };
 
 export const Green3D: React.FC = () => {
   return (
     <Canvas shadows className="absolute inset-0 z-0">
-      {/* 1. Environment & Lighting */}
-      <color attach="background" args={['#242322']} /> {/* midnight-surface */}
-      <fog attach="fog" args={['#242322', 2, 15]} /> {/* Fade into void */}
+      {/* 1. Environment & Lighting - Cozy Scandinavian Minimalist */}
+      <color attach="background" args={['#E5E0D8']} /> {/* Warm Grey/Greige background - less bright */}
+      <fog attach="fog" args={['#E5E0D8', 10, 40]} /> {/* Fade to match background */}
       
-      {/* SoftShadows removed due to shader compilation errors with Three.js r160+ */}
-      <ambientLight intensity={0.6} />
+      {/* Soft, Warm Studio Lighting */}
+      <ambientLight intensity={0.5} color="#ffffff" /> {/* Reduced intensity */}
       <directionalLight 
-        position={[5, 10, -5]} 
-        intensity={1} 
+        position={[5, 10, 5]} 
+        intensity={0.6} // Softer key light
         castShadow 
+        shadow-mapSize={[1024, 1024]}
         shadow-bias={-0.0001}
       />
-      <Environment preset="studio" blur={0.8} />
+      {/* Subtle environment reflection */}
+      <Environment preset="city" blur={1} /> {/* City has warmer tones than studio */}
 
       {/* 2. Camera Rig */}
       <DynamicCamera />
 
       {/* 3. Objects */}
       <VirtualGreenPlane />
+      <AimLine3D />
       <Ball3D />
+      <DistanceIndicator />
       
-      {/* 4. Floor (Void catcher) */}
+      {/* 4. Floor - Clean minimalist plane matching background */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]} receiveShadow>
         <planeGeometry args={[100, 100]} />
-        <meshStandardMaterial color="#1E3A2B" roughness={1} />
+        <meshStandardMaterial color="#E5E0D8" roughness={1} />
       </mesh>
 
     </Canvas>

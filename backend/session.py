@@ -1,10 +1,12 @@
 """
 Session tracking for putting simulator.
 Tracks putts made/attempted, streaks, and session statistics.
+Includes consistency metrics, tendency analysis, and miss distribution.
 """
 
 import logging
 import time
+import numpy as np
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict
 from datetime import datetime
@@ -46,6 +48,76 @@ class ShotRecord:
     @property
     def is_made(self) -> bool:
         return self.result == ShotResult.MADE
+    
+    @property
+    def distance_error_m(self) -> float:
+        """Distance error (positive = long, negative = short)."""
+        return self.distance_m - self.target_distance_m
+
+
+@dataclass
+class ConsistencyMetrics:
+    """Consistency/variability metrics for putting analysis."""
+    # Standard deviations
+    speed_stddev: float = 0.0           # σ of ball speed (m/s)
+    direction_stddev: float = 0.0       # σ of start line direction (degrees)
+    distance_error_stddev: float = 0.0  # σ of distance error (m)
+    
+    # Coefficient of variation (%)
+    speed_cv: float = 0.0               # CV = stddev/mean * 100
+    
+    # Composite consistency score (0-100, higher = more consistent)
+    consistency_score: float = 0.0
+    
+    # Rolling consistency (last N shots)
+    rolling_speed_stddev: float = 0.0
+    rolling_direction_stddev: float = 0.0
+    rolling_window: int = 10
+
+
+@dataclass
+class TendencyAnalysis:
+    """Tendency/bias analysis for putting patterns."""
+    # Speed/distance bias (positive = hitting long, negative = short)
+    speed_bias_m_s: float = 0.0         # Avg difference from optimal speed
+    distance_bias_m: float = 0.0        # Avg (actual - target) distance
+    
+    # Direction bias (positive = pushing right, negative = pulling left)
+    direction_bias_deg: float = 0.0     # Avg direction (0 = straight)
+    lateral_bias_m: float = 0.0         # Avg lateral miss (+ = right)
+    
+    # Dominant miss pattern
+    dominant_miss: str = "none"         # "right-short", "left-long", etc.
+    dominant_miss_percentage: float = 0.0
+    
+    # Pattern detection messages
+    speed_tendency: str = ""            # "hitting long", "hitting short", "neutral"
+    direction_tendency: str = ""        # "pushing right", "pulling left", "neutral"
+
+
+@dataclass
+class MissDistribution:
+    """Distribution of misses by quadrant and type."""
+    # Quadrant counts (for missed putts only)
+    right_short: int = 0
+    right_long: int = 0
+    left_short: int = 0
+    left_long: int = 0
+    
+    # Percentages
+    right_short_pct: float = 0.0
+    right_long_pct: float = 0.0
+    left_short_pct: float = 0.0
+    left_long_pct: float = 0.0
+    
+    # Side totals
+    total_right: int = 0
+    total_left: int = 0
+    total_short: int = 0
+    total_long: int = 0
+    
+    # Total misses analyzed
+    total_misses: int = 0
 
 
 @dataclass
@@ -63,6 +135,15 @@ class SessionStats:
     avg_speed_m_s: float = 0.0
     avg_miss_distance_m: float = 0.0
     avg_lateral_miss_m: float = 0.0
+    
+    # NEW: Consistency metrics
+    consistency: ConsistencyMetrics = field(default_factory=ConsistencyMetrics)
+    
+    # NEW: Tendency analysis
+    tendencies: TendencyAnalysis = field(default_factory=TendencyAnalysis)
+    
+    # NEW: Miss distribution
+    miss_distribution: MissDistribution = field(default_factory=MissDistribution)
     
     @property
     def make_percentage(self) -> float:
@@ -217,7 +298,176 @@ class SessionManager:
                     "percentage": round((made / len(band_shots)) * 100, 1)
                 }
         
+        # Calculate consistency metrics
+        stats.consistency = self._calculate_consistency()
+        
+        # Calculate tendency analysis
+        stats.tendencies = self._calculate_tendencies()
+        
+        # Calculate miss distribution
+        stats.miss_distribution = self._calculate_miss_distribution()
+        
         return stats
+    
+    def _calculate_consistency(self, rolling_window: int = 10) -> ConsistencyMetrics:
+        """Calculate consistency/variability metrics."""
+        metrics = ConsistencyMetrics(rolling_window=rolling_window)
+        
+        if len(self.shots) < 3:
+            return metrics
+        
+        # Extract data arrays
+        speeds = np.array([s.speed_m_s for s in self.shots])
+        directions = np.array([s.direction_deg for s in self.shots])
+        distance_errors = np.array([s.distance_error_m for s in self.shots])
+        
+        # Standard deviations (full session)
+        metrics.speed_stddev = float(np.std(speeds))
+        metrics.direction_stddev = float(np.std(directions))
+        metrics.distance_error_stddev = float(np.std(distance_errors))
+        
+        # Coefficient of variation for speed
+        avg_speed = np.mean(speeds)
+        if avg_speed > 0:
+            metrics.speed_cv = float((metrics.speed_stddev / avg_speed) * 100)
+        
+        # Rolling consistency (last N shots)
+        if len(self.shots) >= rolling_window:
+            recent_shots = self.shots[-rolling_window:]
+            recent_speeds = np.array([s.speed_m_s for s in recent_shots])
+            recent_directions = np.array([s.direction_deg for s in recent_shots])
+            metrics.rolling_speed_stddev = float(np.std(recent_speeds))
+            metrics.rolling_direction_stddev = float(np.std(recent_directions))
+        else:
+            metrics.rolling_speed_stddev = metrics.speed_stddev
+            metrics.rolling_direction_stddev = metrics.direction_stddev
+        
+        # Composite consistency score (0-100)
+        # Lower stddev = higher score
+        # Benchmarks: Tour pros have ~0.1 m/s speed stddev, ~1° direction stddev
+        speed_score = max(0, 100 - (metrics.speed_stddev / 0.3) * 50)  # 0.3 m/s stddev = 50 score
+        direction_score = max(0, 100 - (metrics.direction_stddev / 3.0) * 50)  # 3° stddev = 50 score
+        distance_score = max(0, 100 - (metrics.distance_error_stddev / 0.5) * 50)  # 0.5m stddev = 50 score
+        
+        # Weighted composite (direction matters most for putting)
+        metrics.consistency_score = float(
+            direction_score * 0.4 +
+            distance_score * 0.35 +
+            speed_score * 0.25
+        )
+        metrics.consistency_score = min(100, max(0, metrics.consistency_score))
+        
+        return metrics
+    
+    def _calculate_tendencies(self) -> TendencyAnalysis:
+        """Calculate tendency/bias analysis."""
+        tendencies = TendencyAnalysis()
+        
+        if len(self.shots) < 3:
+            return tendencies
+        
+        # Speed/distance bias
+        distance_errors = [s.distance_error_m for s in self.shots]
+        tendencies.distance_bias_m = float(np.mean(distance_errors))
+        
+        speeds = [s.speed_m_s for s in self.shots]
+        tendencies.speed_bias_m_s = float(np.mean(speeds))  # Could compare to optimal
+        
+        # Direction bias
+        directions = [s.direction_deg for s in self.shots]
+        tendencies.direction_bias_deg = float(np.mean(directions))
+        
+        # Lateral bias (only from misses)
+        misses = [s for s in self.shots if not s.is_made]
+        if misses:
+            lateral_misses = [s.lateral_miss_m for s in misses]
+            tendencies.lateral_bias_m = float(np.mean(lateral_misses))
+        
+        # Determine dominant miss pattern from misses
+        if len(misses) >= 3:
+            quadrant_counts = {
+                "right-short": 0,
+                "right-long": 0,
+                "left-short": 0,
+                "left-long": 0
+            }
+            
+            for miss in misses:
+                is_right = miss.lateral_miss_m > 0
+                is_long = miss.depth_miss_m > 0
+                
+                if is_right and not is_long:
+                    quadrant_counts["right-short"] += 1
+                elif is_right and is_long:
+                    quadrant_counts["right-long"] += 1
+                elif not is_right and not is_long:
+                    quadrant_counts["left-short"] += 1
+                else:
+                    quadrant_counts["left-long"] += 1
+            
+            # Find dominant
+            dominant = max(quadrant_counts, key=quadrant_counts.get)
+            dominant_count = quadrant_counts[dominant]
+            tendencies.dominant_miss = dominant
+            tendencies.dominant_miss_percentage = float((dominant_count / len(misses)) * 100)
+        
+        # Generate tendency messages
+        # Speed tendency
+        if tendencies.distance_bias_m > 0.15:
+            tendencies.speed_tendency = "hitting long"
+        elif tendencies.distance_bias_m < -0.15:
+            tendencies.speed_tendency = "hitting short"
+        else:
+            tendencies.speed_tendency = "neutral"
+        
+        # Direction tendency
+        if tendencies.direction_bias_deg > 1.5:
+            tendencies.direction_tendency = "pushing right"
+        elif tendencies.direction_bias_deg < -1.5:
+            tendencies.direction_tendency = "pulling left"
+        else:
+            tendencies.direction_tendency = "neutral"
+        
+        return tendencies
+    
+    def _calculate_miss_distribution(self) -> MissDistribution:
+        """Calculate miss distribution by quadrant."""
+        dist = MissDistribution()
+        
+        misses = [s for s in self.shots if not s.is_made]
+        if not misses:
+            return dist
+        
+        dist.total_misses = len(misses)
+        
+        for miss in misses:
+            is_right = miss.lateral_miss_m > 0
+            is_long = miss.depth_miss_m > 0
+            
+            if is_right and not is_long:
+                dist.right_short += 1
+            elif is_right and is_long:
+                dist.right_long += 1
+            elif not is_right and not is_long:
+                dist.left_short += 1
+            else:
+                dist.left_long += 1
+        
+        # Calculate percentages
+        total = dist.total_misses
+        if total > 0:
+            dist.right_short_pct = round((dist.right_short / total) * 100, 1)
+            dist.right_long_pct = round((dist.right_long / total) * 100, 1)
+            dist.left_short_pct = round((dist.left_short / total) * 100, 1)
+            dist.left_long_pct = round((dist.left_long / total) * 100, 1)
+        
+        # Side totals
+        dist.total_right = dist.right_short + dist.right_long
+        dist.total_left = dist.left_short + dist.left_long
+        dist.total_short = dist.right_short + dist.left_short
+        dist.total_long = dist.right_long + dist.left_long
+        
+        return dist
     
     def get_last_n_shots(self, n: int = 10) -> List[ShotRecord]:
         """Get the last N shots."""
@@ -274,6 +524,43 @@ class SessionManager:
             "avg_speed_m_s": round(stats.avg_speed_m_s, 2),
             "avg_miss_distance_m": round(stats.avg_miss_distance_m, 3),
             "putts_by_distance": stats.putts_by_distance,
+            # NEW: Consistency metrics
+            "consistency": {
+                "speed_stddev": round(stats.consistency.speed_stddev, 3),
+                "direction_stddev": round(stats.consistency.direction_stddev, 2),
+                "distance_error_stddev": round(stats.consistency.distance_error_stddev, 3),
+                "speed_cv": round(stats.consistency.speed_cv, 1),
+                "consistency_score": round(stats.consistency.consistency_score, 1),
+                "rolling_speed_stddev": round(stats.consistency.rolling_speed_stddev, 3),
+                "rolling_direction_stddev": round(stats.consistency.rolling_direction_stddev, 2),
+            },
+            # NEW: Tendency analysis
+            "tendencies": {
+                "speed_bias_m_s": round(stats.tendencies.speed_bias_m_s, 3),
+                "distance_bias_m": round(stats.tendencies.distance_bias_m, 3),
+                "direction_bias_deg": round(stats.tendencies.direction_bias_deg, 2),
+                "lateral_bias_m": round(stats.tendencies.lateral_bias_m, 3),
+                "dominant_miss": stats.tendencies.dominant_miss,
+                "dominant_miss_percentage": round(stats.tendencies.dominant_miss_percentage, 1),
+                "speed_tendency": stats.tendencies.speed_tendency,
+                "direction_tendency": stats.tendencies.direction_tendency,
+            },
+            # NEW: Miss distribution
+            "miss_distribution": {
+                "right_short": stats.miss_distribution.right_short,
+                "right_long": stats.miss_distribution.right_long,
+                "left_short": stats.miss_distribution.left_short,
+                "left_long": stats.miss_distribution.left_long,
+                "right_short_pct": stats.miss_distribution.right_short_pct,
+                "right_long_pct": stats.miss_distribution.right_long_pct,
+                "left_short_pct": stats.miss_distribution.left_short_pct,
+                "left_long_pct": stats.miss_distribution.left_long_pct,
+                "total_right": stats.miss_distribution.total_right,
+                "total_left": stats.miss_distribution.total_left,
+                "total_short": stats.miss_distribution.total_short,
+                "total_long": stats.miss_distribution.total_long,
+                "total_misses": stats.miss_distribution.total_misses,
+            },
         }
 
 

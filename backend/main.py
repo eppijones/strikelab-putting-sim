@@ -641,7 +641,7 @@ app = FastAPI(
 # Add CORS middleware to allow frontend dev server
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:3000", "http://127.0.0.1:5173", "http://127.0.0.1:5174"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1198,6 +1198,73 @@ async def get_stats_by_distance():
         })
     except Exception as e:
         logger.error(f"Failed to get stats by distance: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/stats/consistency")
+async def get_consistency_stats():
+    """
+    Get detailed consistency and analytics for the current session.
+    
+    Returns:
+    - Consistency metrics (stddev of speed, direction, distance)
+    - Tendency analysis (bias detection)
+    - Miss distribution (quadrant analysis)
+    - Roll quality data (if available)
+    """
+    try:
+        sim = get_app_instance()
+        stats = sim.session_manager.get_stats()
+        
+        return JSONResponse({
+            "success": True,
+            "total_putts": stats.total_putts,
+            "putts_made": stats.putts_made,
+            "consistency": {
+                "speed_stddev": round(stats.consistency.speed_stddev, 3),
+                "direction_stddev": round(stats.consistency.direction_stddev, 2),
+                "distance_error_stddev": round(stats.consistency.distance_error_stddev, 3),
+                "speed_cv": round(stats.consistency.speed_cv, 1),
+                "consistency_score": round(stats.consistency.consistency_score, 1),
+                "rolling_speed_stddev": round(stats.consistency.rolling_speed_stddev, 3),
+                "rolling_direction_stddev": round(stats.consistency.rolling_direction_stddev, 2),
+                "rolling_window": stats.consistency.rolling_window,
+            },
+            "tendencies": {
+                "speed_bias_m_s": round(stats.tendencies.speed_bias_m_s, 3),
+                "distance_bias_m": round(stats.tendencies.distance_bias_m, 3),
+                "direction_bias_deg": round(stats.tendencies.direction_bias_deg, 2),
+                "lateral_bias_m": round(stats.tendencies.lateral_bias_m, 3),
+                "dominant_miss": stats.tendencies.dominant_miss,
+                "dominant_miss_percentage": round(stats.tendencies.dominant_miss_percentage, 1),
+                "speed_tendency": stats.tendencies.speed_tendency,
+                "direction_tendency": stats.tendencies.direction_tendency,
+            },
+            "miss_distribution": {
+                "right_short": stats.miss_distribution.right_short,
+                "right_long": stats.miss_distribution.right_long,
+                "left_short": stats.miss_distribution.left_short,
+                "left_long": stats.miss_distribution.left_long,
+                "right_short_pct": stats.miss_distribution.right_short_pct,
+                "right_long_pct": stats.miss_distribution.right_long_pct,
+                "left_short_pct": stats.miss_distribution.left_short_pct,
+                "left_long_pct": stats.miss_distribution.left_long_pct,
+                "total_right": stats.miss_distribution.total_right,
+                "total_left": stats.miss_distribution.total_left,
+                "total_short": stats.miss_distribution.total_short,
+                "total_long": stats.miss_distribution.total_long,
+                "total_misses": stats.miss_distribution.total_misses,
+            },
+            "benchmarks": {
+                "tour_speed_stddev": 0.1,  # Tour pros: ~0.1 m/s
+                "tour_direction_stddev": 1.0,  # Tour pros: ~1°
+                "tour_distance_error_stddev": 0.3,  # Tour pros: ~30cm
+                "excellent_consistency_threshold": 80,
+                "good_consistency_threshold": 60,
+            }
+        })
+    except Exception as e:
+        logger.error(f"Failed to get consistency stats: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 

@@ -13,19 +13,15 @@ export const Ball3D: React.FC = () => {
     let targetPos: THREE.Vector3 | null = null;
 
     if (ballPosition) {
-      // Coordinate Mapping (Same as Camera)
-      // Z = Forward (Putt direction) = X pixel
-      // X = Horizontal (Left/Right) = Y pixel (centered)
+      // ALWAYS CENTER: Ball always appears at X=0 (center of screen)
+      // regardless of physical position on the mat
+      // Only Z (distance/forward) position is used from tracking
+      // This creates a "virtual straight putt" view
       
       const zMeters = ballPosition.x / pixelsPerMeter;
-      const xMeters = (ballPosition.y - 400) / pixelsPerMeter; // Center 400 assuming 800w
+      // X is always 0 - ball stays centered on screen
       
-      // Correct Mapping:
-      // 3D Z (Forward) = ballPosition.x / PPM
-      // 3D X (Left/Right) = -(ballPosition.y - (800/2)) / PPM
-      // We assume camera at Z=-1.5 looking at Z=0.
-      
-      targetPos = new THREE.Vector3(xMeters, 0.0213, zMeters); // Radius 0.0213 (42.67mm / 2)
+      targetPos = new THREE.Vector3(0, 0.0213, zMeters); // Always X=0, only Z changes
       
       // Smooth interpolation for visual jitter reduction
       meshRef.current.position.lerp(targetPos, delta * 20);

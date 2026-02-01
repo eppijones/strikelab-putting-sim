@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings, X, Volume2, VolumeX, Target, RotateCcw, ChevronDown, Gauge } from 'lucide-react';
+import { Settings, X, Volume2, VolumeX, Target, RotateCcw, ChevronDown, Gauge, Eye } from 'lucide-react';
 import { usePuttingState } from '../../contexts/WebSocketContext';
 import { useSound } from '../../hooks/useSoundEffects';
 
@@ -19,7 +19,7 @@ interface SettingsMenuProps {
 
 export const SettingsMenu: React.FC<SettingsMenuProps> = ({ className = '' }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const { gameData, setHoleDistance, resetSession } = usePuttingState();
+  const { gameData, setHoleDistance, resetSession, showDistance, setShowDistance } = usePuttingState();
   const { settings: soundSettings, toggleSound, setVolume, playSound } = useSound();
   
   const currentHoleDistance = gameData?.hole?.distance_m || 3.0;
@@ -183,6 +183,33 @@ export const SettingsMenu: React.FC<SettingsMenuProps> = ({ className = '' }) =>
                   </div>
                 </section>
                 
+                {/* Display Settings */}
+                <section>
+                  <div className="flex items-center gap-2 mb-4">
+                    <Eye size={18} className="text-purple-400" />
+                    <h3 className="text-sm font-semibold text-white/80 uppercase tracking-wider">
+                      Display
+                    </h3>
+                  </div>
+
+                  <div className="flex items-center justify-between mb-4">
+                    <span className="text-white/70">Show Live Distance</span>
+                    <button
+                      onClick={() => {
+                        setShowDistance(!showDistance);
+                        playSound('click');
+                      }}
+                      className={`w-12 h-6 rounded-full transition-colors relative
+                                ${showDistance ? 'bg-emerald-500' : 'bg-white/20'}`}
+                    >
+                      <motion.div
+                        animate={{ x: showDistance ? 24 : 0 }}
+                        className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow-md"
+                      />
+                    </button>
+                  </div>
+                </section>
+
                 {/* Sound Settings */}
                 <section>
                   <div className="flex items-center gap-2 mb-4">

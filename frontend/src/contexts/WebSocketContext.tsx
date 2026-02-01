@@ -74,6 +74,43 @@ export interface GameState_Data {
   } | null;
 }
 
+export interface ConsistencyMetrics {
+  speed_stddev: number;
+  direction_stddev: number;
+  distance_error_stddev: number;
+  speed_cv: number;
+  consistency_score: number;
+  rolling_speed_stddev: number;
+  rolling_direction_stddev: number;
+}
+
+export interface TendencyAnalysis {
+  speed_bias_m_s: number;
+  distance_bias_m: number;
+  direction_bias_deg: number;
+  lateral_bias_m: number;
+  dominant_miss: string;
+  dominant_miss_percentage: number;
+  speed_tendency: string;
+  direction_tendency: string;
+}
+
+export interface MissDistribution {
+  right_short: number;
+  right_long: number;
+  left_short: number;
+  left_long: number;
+  right_short_pct: number;
+  right_long_pct: number;
+  left_short_pct: number;
+  left_long_pct: number;
+  total_right: number;
+  total_left: number;
+  total_short: number;
+  total_long: number;
+  total_misses: number;
+}
+
 export interface SessionData {
   session_id: string;
   duration_s: number;
@@ -85,6 +122,10 @@ export interface SessionData {
   avg_speed_m_s: number;
   avg_miss_distance_m: number;
   putts_by_distance: Record<string, { total: number; made: number; percentage: number }>;
+  // NEW: Consistency and analytics
+  consistency: ConsistencyMetrics;
+  tendencies: TendencyAnalysis;
+  miss_distribution: MissDistribution;
 }
 
 export type DrillType = 'none' | 'distance_control' | 'ladder_drill';
@@ -148,6 +189,8 @@ interface WebSocketContextType {
   resetSession: () => Promise<void>;
   startDrill: (drillType: DrillType) => Promise<void>;
   stopDrill: () => Promise<void>;
+  showDistance: boolean;
+  setShowDistance: (show: boolean) => void;
 }
 
 // --- Test Shot Generator ---
@@ -250,6 +293,9 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
   const isConnected = readyState === ReadyState.OPEN;
   const realPixelsPerMeter = realLastJsonMessage?.pixels_per_meter || 1150;
 
+  // --- UI State ---
+  const [showDistance, setShowDistance] = useState(true);
+
   // --- Test Shot State ---
   const [testShot, setTestShot] = useState<TestShotState | null>(null);
   const animationFrameRef = useRef<number | null>(null);
@@ -269,50 +315,66 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     });
   }, [realPixelsPerMeter]);
 
-  // Test shot animation loop
+  // Test shot animation loop - uses LINEAR DECELERATION physics (same as backend)
+  // v(t) = v0 - a*t, where a = v0²/(2*d) for stopping at distance d
+  // x(t) = v0*t - 0.5*a*t² 
+  // Stops at t_stop = v0/a = 2*d/v0
   useEffect(() => {
     if (!testShot?.active) return;
 
     const animate = () => {
       const elapsed = Date.now() - testShot.startTime;
-      const trackingDuration = testShot.duration * 0.3; // First 30% is tracking
-      const virtualDuration = testShot.duration * 0.7; // Next 70% is virtual rolling
-      const stopDuration = 2000; // Show stopped for 2s
-      const cooldownDuration = 1000; // Cooldown for 1s
+      
+      // Physics parameters
+      const totalDistance = testShot.shot.distance_px;
+      const initialSpeed = testShot.shot.speed_px_s;
+      
+      // Linear deceleration: a = v0²/(2*d)
+      const deceleration = (initialSpeed * initialSpeed) / (2 * totalDistance);
+      
+      // Time to stop: t_stop = v0/a = 2*d/v0
+      const stopTime_ms = (2 * totalDistance / initialSpeed) * 1000;
+      
+      // Phases
+      const trackingDistance = totalDistance * 0.25; // Ball in frame for 25% of distance
+      const trackingTime_ms = (initialSpeed - Math.sqrt(initialSpeed * initialSpeed - 2 * deceleration * trackingDistance)) / deceleration * 1000;
+      const virtualTime_ms = stopTime_ms - trackingTime_ms;
+      const stopDuration = 2000;
+      const cooldownDuration = 1000;
       
       let newPhase: GameState = testShot.phase;
-      let progress = 0;
+      let distance = 0;
       
-      if (elapsed < trackingDuration) {
-        // Tracking phase - ball moving fast
+      if (elapsed < trackingTime_ms) {
+        // Tracking phase - ball decelerating in frame
         newPhase = 'TRACKING';
-        progress = elapsed / trackingDuration;
-        // Use easeOutQuad for natural deceleration feel
-        progress = 1 - (1 - progress) * (1 - progress);
-        progress *= 0.3; // Only cover 30% of distance in tracking
-      } else if (elapsed < trackingDuration + virtualDuration) {
-        // Virtual rolling phase - ball continuing with deceleration
+        const t = elapsed / 1000;
+        // x(t) = v0*t - 0.5*a*t²
+        distance = initialSpeed * t - 0.5 * deceleration * t * t;
+      } else if (elapsed < trackingTime_ms + virtualTime_ms) {
+        // Virtual rolling phase - continuing deceleration
         newPhase = 'VIRTUAL_ROLLING';
-        const virtualElapsed = elapsed - trackingDuration;
-        progress = virtualElapsed / virtualDuration;
-        // Stronger easeOut for rolling to a stop
-        progress = 1 - Math.pow(1 - progress, 3);
-        progress = 0.3 + progress * 0.7; // Cover remaining 70%
-      } else if (elapsed < trackingDuration + virtualDuration + stopDuration) {
+        const t = elapsed / 1000;
+        // Same physics formula, just continuing
+        distance = initialSpeed * t - 0.5 * deceleration * t * t;
+        // Clamp to total distance
+        distance = Math.min(distance, totalDistance);
+      } else if (elapsed < trackingTime_ms + virtualTime_ms + stopDuration) {
         // Stopped phase
         newPhase = 'STOPPED';
-        progress = 1;
-      } else if (elapsed < trackingDuration + virtualDuration + stopDuration + cooldownDuration) {
+        distance = totalDistance;
+      } else if (elapsed < trackingTime_ms + virtualTime_ms + stopDuration + cooldownDuration) {
         // Cooldown phase
         newPhase = 'COOLDOWN';
-        progress = 1;
+        distance = totalDistance;
       } else {
         // Done - return to armed
         setTestShot(null);
         return;
       }
       
-      // Calculate current position
+      // Calculate current position from distance traveled
+      const progress = distance / totalDistance;
       const currentX = testShot.startX + (testShot.endX - testShot.startX) * progress;
       const currentY = testShot.startY + (testShot.endY - testShot.startY) * progress;
       
@@ -493,6 +555,8 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     resetSession,
     startDrill,
     stopDrill,
+    showDistance,
+    setShowDistance,
   };
 
   return (
