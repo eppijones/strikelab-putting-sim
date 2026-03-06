@@ -43,3 +43,11 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Large media files
+*.mov
+*.mp4
+
+# Cursor IDE (keep rules)
+.cursor/*
+!.cursor/rules/

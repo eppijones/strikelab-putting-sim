@@ -1,0 +1,36 @@
+---
+description: Protect core tracking system - ask before modifying
+alwaysApply: true
+---
+
+# Core Tracking System Protection
+
+The following files contain the **stable, tested tracking foundation**. Do NOT modify them without explicit user permission.
+
+## Protected Files (ASK BEFORE MODIFYING)
+
+- `backend/detector.py` - Ball detection with Hough circles
+- `backend/tracker.py` - Multi-frame tracking with Kalman filter
+- `backend/predictor.py` - Physics-based trajectory prediction
+- `backend/calibration.py` - Surface/green calibration
+- `backend/lens_calibration.py` - Camera lens distortion calibration
+- `backend/camera.py` - Camera capture interface
+
+## Rules
+
+1. **Never modify** these files without asking the user first
+2. If a new feature seems to require changes to tracking logic, **explain why** and ask permission
+3. **Adding new files** to backend/ is allowed (e.g., database.py, game_state.py)
+4. **Importing from** these modules is encouraged - build on top of them
+5. `backend/config.py` can be extended with new settings, but don't remove existing ones
+
+## Allowed Actions
+
+- Create new backend modules that import from protected files
+- Add API endpoints that use the tracking system
+- Build frontend/UI that consumes tracking data
+- Add database, gamification, or user experience features
+
+## When User Asks for Tracking Changes
+
+If the user explicitly requests changes to tracking behavior, confirm which specific file needs modification before proceeding.
