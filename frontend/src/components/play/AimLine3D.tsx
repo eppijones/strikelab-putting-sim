@@ -124,6 +124,7 @@ export const AimLine3D: React.FC = () => {
   return (
     <group ref={groupRef}>
       {/* Main aim line - subtle dashed appearance */}
+      {/* @ts-expect-error R3F line element conflicts with SVG line type */}
       <line geometry={lineGeometry}>
         <lineDashedMaterial 
           color="#8EB897"

@@ -331,7 +331,8 @@ def get_undistort_maps(
 def run_live_calibration(
     camera_id: int = 0,
     checkerboard_size: Tuple[int, int] = DEFAULT_CHECKERBOARD,
-    num_images: int = 15
+    num_images: int = 15,
+    auto_detect_arducam: bool = True
 ):
     """
     Interactive live calibration using webcam/camera.
@@ -340,7 +341,14 @@ def run_live_calibration(
     Press 'c' to run calibration after capturing enough images.
     Press 'q' to quit.
     """
+    import sys
+    from .cameras.arducam_source import find_arducam_device
+
+    if auto_detect_arducam:
+        camera_id = find_arducam_device(camera_id, verbose=True)
+
     print(f"\n=== Lens Calibration Tool ===")
+    print(f"Camera device: {camera_id}")
     print(f"Checkerboard size: {checkerboard_size[0]}x{checkerboard_size[1]} inner corners")
     print(f"Target images: {num_images}")
     print()
@@ -352,12 +360,12 @@ def run_live_calibration(
     print("  5. Press 'q' to quit")
     print()
     
-    cap = cv2.VideoCapture(camera_id)
+    backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
+    cap = cv2.VideoCapture(camera_id, backend)
     if not cap.isOpened():
         print(f"Error: Could not open camera {camera_id}")
         return
     
-    # Set camera resolution (adjust as needed)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 800)
     
@@ -449,7 +457,8 @@ def main():
     """Main entry point for lens calibration tool."""
     parser = argparse.ArgumentParser(description="Lens Distortion Calibration Tool")
     parser.add_argument("--live", action="store_true", help="Run interactive live calibration")
-    parser.add_argument("--camera", type=int, default=0, help="Camera device ID")
+    parser.add_argument("--camera", type=int, default=0, help="Camera device ID (overridden by auto-detect)")
+    parser.add_argument("--no-auto-detect", action="store_true", help="Skip Arducam auto-detection, use --camera value as-is")
     parser.add_argument("--cols", type=int, default=9, help="Checkerboard columns (inner corners)")
     parser.add_argument("--rows", type=int, default=6, help="Checkerboard rows (inner corners)")
     parser.add_argument("--num-images", type=int, default=15, help="Number of calibration images to capture")
@@ -476,15 +485,16 @@ def main():
         run_live_calibration(
             camera_id=args.camera,
             checkerboard_size=(args.cols, args.rows),
-            num_images=args.num_images
+            num_images=args.num_images,
+            auto_detect_arducam=not args.no_auto_detect
         )
     
     else:
         parser.print_help()
         print("\n\nExamples:")
-        print("  python -m backend.lens_calibration --live        # Interactive calibration")
-        print("  python -m backend.lens_calibration --verify      # Check existing calibration")
-        print("  python -m backend.lens_calibration --live --camera 1  # Use camera 1")
+        print("  python -m backend.lens_calibration --live                       # Auto-detect Arducam & calibrate")
+        print("  python -m backend.lens_calibration --verify                     # Check existing calibration")
+        print("  python -m backend.lens_calibration --live --no-auto-detect --camera 1  # Force camera index 1")
 
 
 if __name__ == "__main__":

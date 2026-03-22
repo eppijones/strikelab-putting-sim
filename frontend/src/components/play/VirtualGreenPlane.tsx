@@ -143,9 +143,10 @@ const StartingPositionMarker: React.FC = () => {
               count={points.length}
               array={new Float32Array(points.flatMap(p => [p.x, p.y, 0]))}
               itemSize={3}
+              args={[new Float32Array(points.flatMap(p => [p.x, p.y, 0])), 3]}
             />
           </bufferGeometry>
-          <lineBasicMaterial color="rgba(255, 255, 255, 0.5)" linewidth={2} />
+          <lineBasicMaterial color="#ffffff" opacity={0.5} transparent linewidth={2} />
         </line>
       ))}
     </group>
@@ -167,7 +168,13 @@ const GridRuler: React.FC = () => {
   const markers = [];
 
   // Helper to create line segments given gaps
-  const createLineSegments = (z: number, gaps: Array<[number, number]>, color: string, thickness: number) => {
+  const createLineSegments = (
+    z: number,
+    gaps: Array<[number, number]>,
+    color: string,
+    opacity: number,
+    thickness: number,
+  ) => {
     // Start with one full segment covering the green
     let segments = [[-halfWidth, halfWidth]];
 
@@ -198,7 +205,7 @@ const GridRuler: React.FC = () => {
         return (
             <mesh key={`seg-${z}-${idx}`} position={[center, 0.002, z]} rotation={[-Math.PI / 2, 0, 0]}>
                 <planeGeometry args={[width, thickness]} />
-                <meshBasicMaterial color={color} />
+                <meshBasicMaterial color={color} opacity={opacity} transparent />
             </mesh>
         );
     });
@@ -217,7 +224,7 @@ const GridRuler: React.FC = () => {
           markers.push(
             <mesh key={`tick-C-${dist}`} position={[0, 0.002, dist]} rotation={[-Math.PI / 2, 0, 0]}>
                 <planeGeometry args={[0.1, 0.005]} /> {/* 10cm wide, thin */}
-                <meshBasicMaterial color="rgba(255, 255, 255, 0.1)" />
+                <meshBasicMaterial color="#ffffff" opacity={0.1} transparent />
             </mesh>
           );
       }
@@ -226,13 +233,13 @@ const GridRuler: React.FC = () => {
       markers.push(
         <mesh key={`tick-L-${dist}`} position={[-textCenter, 0.002, dist]} rotation={[-Math.PI / 2, 0, 0]}>
             <planeGeometry args={[0.05, 0.005]} />
-            <meshBasicMaterial color="rgba(255, 255, 255, 0.1)" />
+            <meshBasicMaterial color="#ffffff" opacity={0.1} transparent />
         </mesh>
       );
       markers.push(
         <mesh key={`tick-R-${dist}`} position={[textCenter, 0.002, dist]} rotation={[-Math.PI / 2, 0, 0]}>
             <planeGeometry args={[0.05, 0.005]} />
-            <meshBasicMaterial color="rgba(255, 255, 255, 0.1)" />
+            <meshBasicMaterial color="#ffffff" opacity={0.1} transparent />
         </mesh>
       );
   }
@@ -243,7 +250,7 @@ const GridRuler: React.FC = () => {
     const isMajor = Number.isInteger(dist);
     const thickness = isMajor ? 0.015 : 0.008; // Major lines thicker
     const opacity = isMajor ? 0.2 : 0.1;
-    const color = `rgba(255, 255, 255, ${opacity})`;
+    const color = "#ffffff";
     
     const gaps: Array<[number, number]> = [];
 
@@ -258,7 +265,7 @@ const GridRuler: React.FC = () => {
         gaps.push([textCenter - textClearance/2, textCenter + textClearance/2]);
     }
 
-    markers.push(...createLineSegments(dist, gaps, color, thickness));
+    markers.push(...createLineSegments(dist, gaps, color, opacity, thickness));
 
     // Text Labels
     if (isMajor) {
@@ -269,7 +276,7 @@ const GridRuler: React.FC = () => {
             position={[-textCenter, 0.002, dist]}
             rotation={[-Math.PI / 2, 0, Math.PI]} // Readable from camera
             fontSize={0.15} // Slightly larger
-            color="rgba(255, 255, 255, 0.4)"
+            color="#b3b3b3"
             anchorX="center" // Centered in gap
             anchorY="middle"
           >
@@ -284,7 +291,7 @@ const GridRuler: React.FC = () => {
             position={[textCenter, 0.002, dist]}
             rotation={[-Math.PI / 2, 0, Math.PI]} // Readable from camera
             fontSize={0.15}
-            color="rgba(255, 255, 255, 0.4)"
+            color="#b3b3b3"
             anchorX="center"
             anchorY="middle"
           >

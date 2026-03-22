@@ -1,14 +1,21 @@
 # StrikeLab Putting Sim - Dependencies
-# Python 3.11+
+# Python 3.12+
+#
+# Install:  pip install -r requirements.txt
+# Note: Do NOT install opencv-python-headless alongside opencv-python.
+#       This project requires the full opencv-python (camera capture + codecs).
 
-# Core
+# ── Core ──────────────────────────────────────────────────────────────
 opencv-python>=4.9.0
 numpy>=1.26.0
+scipy>=1.12.0
 
-# Web server
+# ── Web server ────────────────────────────────────────────────────────
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 websockets>=12.0
-
-# Utilities
 pydantic>=2.5.0
+
+# ── Depth cameras (optional - gracefully skipped if not present) ──────
+pyrealsense2>=2.55.0
+# pyzed: installed via ZED SDK installer (not pip)

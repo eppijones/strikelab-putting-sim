@@ -4,6 +4,8 @@ import { PerspectiveCamera, Environment, OrbitControls } from '@react-three/drei
 import { VirtualGreenPlane } from './VirtualGreenPlane';
 import { Ball3D } from './Ball3D';
 import { AimLine3D } from './AimLine3D';
+import BallFlight3D from './BallFlight3D';
+import ClubPath3D from './ClubPath3D';
 import { usePuttingState } from '../../contexts/WebSocketContext';
 import * as THREE from 'three';
 import type { CameraView } from './CameraSelector';
@@ -277,7 +279,8 @@ export const Green3D: React.FC<Green3DProps> = ({ cameraView = 'standard' }) => 
       <VirtualGreenPlane />
       <AimLine3D />
       <Ball3D />
-      {/* <DistanceIndicator /> removed */}
+      <BallFlight3D />
+      <ClubPath3D />
       
       {/* 4. Floor - Clean minimalist plane matching background */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]} receiveShadow>

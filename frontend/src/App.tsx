@@ -3,6 +3,7 @@ import { WebSocketProvider, usePuttingState } from './contexts/WebSocketContext'
 import { ModeToggle, type AppMode } from './components/shared/ModeToggle';
 import { ConnectionStatus } from './components/shared/ConnectionStatus';
 import { SettingsMenu } from './components/shared/SettingsMenu';
+import { ErrorBoundary } from './components/shared/ErrorBoundary';
 import { PlayMode } from './components/play/PlayMode';
 import { LabMode } from './components/lab/LabMode';
 import { AnalyticsPanel } from './components/play/AnalyticsPanel';
@@ -119,11 +120,13 @@ const AppContent: React.FC = () => {
 
 const App: React.FC = () => {
   return (
-    <WebSocketProvider>
-      <SoundProvider>
-        <AppContent />
-      </SoundProvider>
-    </WebSocketProvider>
+    <ErrorBoundary>
+      <WebSocketProvider>
+        <SoundProvider>
+          <AppContent />
+        </SoundProvider>
+      </WebSocketProvider>
+    </ErrorBoundary>
   );
 };
 

@@ -19,12 +19,13 @@ interface ShotHistoryProps {
 }
 
 export const ShotHistory: React.FC<ShotHistoryProps> = ({ className = '', onClose }) => {
-  const { sessionData } = usePuttingState();
+  const { sessionData, isConnected } = usePuttingState();
   const [history, setHistory] = useState<Shot[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedShots, setSelectedShots] = useState<Set<number>>(new Set());
 
   const fetchHistory = async () => {
+    if (!isConnected) return;
     setLoading(true);
     try {
       const response = await fetch('http://localhost:8000/api/session/history');
@@ -43,7 +44,7 @@ export const ShotHistory: React.FC<ShotHistoryProps> = ({ className = '', onClos
 
   useEffect(() => {
     fetchHistory();
-  }, [sessionData?.total_putts]);
+  }, [sessionData?.total_putts, isConnected]);
 
   const handleDelete = async (shotId: number) => {
     try {

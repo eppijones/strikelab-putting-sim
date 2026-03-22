@@ -12,8 +12,8 @@ export const GreenVisualizer: React.FC = () => {
   const viewHeightM = 4.0; // Show 4m total
   
   // Camera resolution for coordinate mapping
-  const camWidth = lastJsonMessage?.resolution[0] || 1280;
-  const camHeight = lastJsonMessage?.resolution[1] || 800;
+  const camWidth = lastJsonMessage?.resolution?.[0] ?? 1280;
+  const camHeight = lastJsonMessage?.resolution?.[1] ?? 800;
 
   // Render Loop
   useEffect(() => {

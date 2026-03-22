@@ -5,9 +5,10 @@ Supports Arducam OV9281 UVC capture at 120fps and video file replay.
 
 import cv2
 import numpy as np
+import sys
 import time
 import logging
-from typing import Optional, Tuple, Generator
+from typing import Optional, Tuple, Generator, List, Dict, Any
 from dataclasses import dataclass, field
 from enum import Enum
 from collections import deque
@@ -26,6 +27,7 @@ class FrameData:
     """Container for frame data with timing information."""
     frame: np.ndarray
     timestamp_ns: int  # Nanoseconds since epoch
+    acquisition_monotonic_ns: int  # Monotonic timestamp at acquisition
     frame_id: int
     
     @property
@@ -101,6 +103,10 @@ class FPSTracker:
         return self._last_fps
 
 
+ARDUCAM_MIN_SUSTAINED_FPS = 25.0
+ARDUCAM_PROFILE_PROBE_TIMEOUT_S = 3.0
+
+
 class Camera:
     """
     Camera abstraction supporting multiple capture modes.
@@ -139,6 +145,9 @@ class Camera:
         
         # Actual camera FPS (as reported by driver)
         self._reported_fps: float = 120.0
+
+        # Post-selection sustained FPS measured during warmup
+        self._sustained_startup_fps: float = 0.0
         
         # Log FPS stats periodically
         self._last_fps_log_time = 0.0
@@ -155,48 +164,237 @@ class Camera:
         return False
     
     def _start_arducam(self) -> bool:
-        """Start Arducam OV9281 capture at 120fps."""
+        """
+        Start Arducam OV9281 capture at 120fps.
+
+        On Windows the Arducam is typically opened via DirectShow (DSHOW), but
+        the DSHOW UVC driver for this camera ignores programmatic exposure
+        control via OpenCV, leaving auto-exposure at ~93 ms and capping the
+        frame rate to ~10 fps.  The Windows Camera app uses Media Foundation
+        (MSMF) which handles exposure correctly.
+
+        Strategy:
+          1. DSHOW — open once, measure FPS, try exposure overrides.
+          2. If DSHOW FPS < 30, close it and scan MSMF indices 0-5 for a
+             1280x800 non-stereo stream (MSMF enumerates devices in a
+             different order than DSHOW).
+          3. Use whichever backend gave the best FPS.
+        """
         logger.info(f"Starting Arducam OV9281 on device {self.device_id}")
-        
-        # Try V4L2 backend first (Linux), then default
-        backends = [cv2.CAP_V4L2, cv2.CAP_ANY]
-        
-        for backend in backends:
-            self._cap = cv2.VideoCapture(self.device_id, backend)
-            if self._cap.isOpened():
-                break
-        
-        if not self._cap or not self._cap.isOpened():
-            logger.error("Failed to open camera")
+
+        if sys.platform == "win32":
+            primary_backend = cv2.CAP_DSHOW
+        elif sys.platform == "darwin":
+            primary_backend = cv2.CAP_AVFOUNDATION
+        else:
+            primary_backend = cv2.CAP_V4L2
+
+        # --- Phase 1: Try primary backend (DSHOW on Windows) ---
+        cap, best_fps, fourcc_text = self._try_open_and_measure(
+            primary_backend, self.device_id, "DSHOW",
+        )
+
+        if cap is not None and best_fps >= 30:
+            return self._finalise_arducam(cap, best_fps, fourcc_text)
+
+        # --- Phase 2 (Windows only): MSMF fallback scan ---
+        if sys.platform == "win32" and (cap is None or best_fps < 30):
+            dshow_fps = best_fps
+            if cap is not None:
+                cap.release()
+                cap = None
+                time.sleep(0.4)  # let driver fully release before MSMF opens
+            logger.info(
+                "DSHOW FPS too low (%.1f). Scanning MSMF backend for Arducam...",
+                dshow_fps,
+            )
+            for msmf_idx in range(6):
+                m_cap, m_fps, m_fourcc = self._try_open_and_measure(
+                    cv2.CAP_MSMF, msmf_idx, f"MSMF[{msmf_idx}]",
+                )
+                if m_cap is None:
+                    continue
+                if m_fps > dshow_fps:
+                    logger.info(
+                        "MSMF device %d better: %.1f fps (vs DSHOW %.1f)",
+                        msmf_idx, m_fps, dshow_fps,
+                    )
+                    return self._finalise_arducam(m_cap, m_fps, m_fourcc)
+                m_cap.release()
+
+            # MSMF didn't help — reopen DSHOW so we at least have a handle.
+            logger.info("MSMF scan did not improve FPS. Reopening DSHOW.")
+            cap, best_fps, fourcc_text = self._try_open_and_measure(
+                primary_backend, self.device_id, "DSHOW(reopen)",
+            )
+
+        # --- Phase 3: non-Windows or CAP_ANY fallback ---
+        if cap is None:
+            cap, best_fps, fourcc_text = self._try_open_and_measure(
+                cv2.CAP_ANY, self.device_id, "ANY",
+            )
+
+        if cap is None:
+            logger.error("Failed to open Arducam on any backend")
             return False
-        
-        # Configure for 120fps capture
-        # MJPG format typically required for high FPS
-        self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.ARDUCAM_WIDTH)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.ARDUCAM_HEIGHT)
-        self._cap.set(cv2.CAP_PROP_FPS, self.ARDUCAM_FPS)
-        
-        # Disable auto exposure for consistent lighting
-        self._cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # Manual mode
-        self._cap.set(cv2.CAP_PROP_EXPOSURE, -6)  # Fast exposure for 120fps
-        
-        # Verify settings
-        actual_w = self._cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-        actual_h = self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-        actual_fps = self._cap.get(cv2.CAP_PROP_FPS)
-        
-        self._reported_fps = actual_fps if actual_fps > 0 else 120.0
-        
-        logger.info(f"Camera configured: {actual_w}x{actual_h} @ {actual_fps}fps")
-        
-        if actual_fps < 100:
-            logger.warning(f"Camera FPS ({actual_fps}) lower than expected 120fps - "
-                          f"velocity calculations will use actual timestamps")
-        
+
+        return self._finalise_arducam(cap, best_fps, fourcc_text)
+
+    # ------------------------------------------------------------------
+    def _try_open_and_measure(
+        self, backend: int, device_id: int, label: str,
+    ) -> Tuple[Optional[cv2.VideoCapture], float, str]:
+        """
+        Open *device_id* with *backend*, verify 1280x800, measure FPS,
+        and try exposure overrides.  Returns (cap, best_fps, fourcc_text)
+        or (None, 0, "") on failure.
+        """
+        cap = cv2.VideoCapture(device_id, backend)
+        if not cap.isOpened():
+            return (None, 0.0, "")
+
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.ARDUCAM_WIDTH)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.ARDUCAM_HEIGHT)
+        cap.set(cv2.CAP_PROP_FPS, self.ARDUCAM_FPS)
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+
+        w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+        h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+
+        if self._is_stereo_sbs(w, h) or not self._is_expected_resolution(w, h):
+            cap.release()
+            return (None, 0.0, "")
+
+        fourcc_text = self._fourcc_to_text(int(cap.get(cv2.CAP_PROP_FOURCC)))
+        reported = cap.get(cv2.CAP_PROP_FPS)
+
+        fps = self._measure_capture_fps(cap, duration_s=0.8)
+        logger.info(
+            "%s device %d: fourcc=%s, res=%.0fx%.0f, reported=%.0ffps, measured=%.1ffps",
+            label, device_id, fourcc_text, w, h, reported, fps,
+        )
+
+        if fps < 30:
+            exposure_overrides = [
+                (0.25, -7, "ae=0.25,ev=-7"),
+                (0.25, -9, "ae=0.25,ev=-9"),
+                (1, -7, "ae=1,ev=-7"),
+                (3, -7, "ae=3,ev=-7"),
+            ]
+            for ae, ev, desc in exposure_overrides:
+                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, ae)
+                cap.set(cv2.CAP_PROP_EXPOSURE, ev)
+                time.sleep(0.1)
+                t = self._measure_capture_fps(cap, duration_s=0.35)
+                logger.info("  %s exposure(%s): %.1f fps", label, desc, t)
+                if t > fps:
+                    fps = t
+                if fps >= 30:
+                    break
+
+        return (cap, fps, fourcc_text)
+
+    # ------------------------------------------------------------------
+    def _finalise_arducam(
+        self, cap: cv2.VideoCapture, fps: float, fourcc_text: str,
+    ) -> bool:
+        self._cap = cap
+        reported = cap.get(cv2.CAP_PROP_FPS)
+        self._reported_fps = reported if reported > 0 else fps
+        self._sustained_startup_fps = fps
+        w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+        h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+
+        logger.info(
+            "Camera selected: fourcc=%s, measured_fps=%.1f, reported_fps=%.1f, res=%.0fx%.0f",
+            fourcc_text, fps, self._reported_fps, w, h,
+        )
+        if fps < ARDUCAM_MIN_SUSTAINED_FPS:
+            logger.warning(
+                "Arducam FPS (%.1f) below target (%.1f). Tracking will work but at reduced temporal resolution.",
+                fps, ARDUCAM_MIN_SUSTAINED_FPS,
+            )
+
+        # DSHOW ignores CAP_PROP_EXPOSURE on this camera, but CAP_PROP_GAIN
+        # and CAP_PROP_BRIGHTNESS may work.  Try boosting gain to brighten
+        # the image without affecting shutter speed / fps.
+        if fps >= 100:
+            self._try_boost_brightness(cap, fps)
+
         self._running = True
         self._frame_id = 0
         return True
+
+    def _try_boost_brightness(
+        self, cap: cv2.VideoCapture, baseline_fps: float,
+    ) -> None:
+        """Best-effort brightness increase via gain/brightness props."""
+        MIN_SAFE_FPS = 110.0
+        props_to_try = [
+            (cv2.CAP_PROP_GAIN, [32, 48, 64], "gain"),
+            (cv2.CAP_PROP_BRIGHTNESS, [140, 160, 180], "brightness"),
+        ]
+        for prop, values, label in props_to_try:
+            orig = cap.get(prop)
+            applied = False
+            for val in values:
+                cap.set(prop, val)
+                time.sleep(0.1)
+                actual = cap.get(prop)
+                if abs(actual - val) > 1:
+                    continue
+                measured = self._measure_capture_fps(cap, duration_s=0.4)
+                logger.info("  Brightness probe (%s=%d): %.1f fps", label, val, measured)
+                if measured >= MIN_SAFE_FPS:
+                    applied = True
+                else:
+                    cap.set(prop, orig)
+                    break
+            if applied:
+                logger.info("Brightness boost applied via %s", label)
+                return
+            else:
+                cap.set(prop, orig)
+        logger.info("DSHOW brightness: driver did not accept gain/brightness adjustments")
+
+    @staticmethod
+    def _measure_capture_fps(cap: cv2.VideoCapture, duration_s: float = 0.7) -> float:
+        # Let driver settle exposure/frame pacing before timing.
+        warmup_end = time.perf_counter() + 0.25
+        while time.perf_counter() < warmup_end:
+            cap.read()
+        start = time.perf_counter()
+        end = start + max(0.3, duration_s)
+        frames = 0
+        while time.perf_counter() < end:
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                continue
+            frames += 1
+        elapsed = max(1e-6, time.perf_counter() - start)
+        return frames / elapsed
+
+    @staticmethod
+    def _is_expected_resolution(width: float, height: float) -> bool:
+        return abs(width - 1280.0) <= 64.0 and abs(height - 800.0) <= 64.0
+
+    @staticmethod
+    def _is_stereo_sbs(width: float, height: float) -> bool:
+        """Detect side-by-side stereo (ZED via UVC) — aspect ratio >= 2.5."""
+        if height <= 0:
+            return False
+        return (width / height) >= 2.5
+
+    @staticmethod
+    def _fourcc_to_text(fourcc: int) -> str:
+        try:
+            return "".join([chr((fourcc >> 8 * i) & 0xFF) for i in range(4)])
+        except Exception:
+            return "????"
     
     def _start_replay(self) -> bool:
         """Start video file replay."""
@@ -267,6 +465,9 @@ class Camera:
                 logger.info("Replay finished")
                 self._running = False
             return None
+        if len(frame.shape) == 2:
+            # Monochrome formats (e.g. Y800) should still flow through BGR detector pipeline.
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
         
         # Generate timestamp
         if self.mode == CameraMode.REPLAY:
@@ -275,6 +476,7 @@ class Camera:
         else:
             # For live capture, use actual system time
             timestamp_ns = time.time_ns()
+        acquisition_monotonic_ns = time.monotonic_ns()
         
         self._frame_id += 1
         
@@ -294,6 +496,7 @@ class Camera:
         return FrameData(
             frame=frame,
             timestamp_ns=timestamp_ns,
+            acquisition_monotonic_ns=acquisition_monotonic_ns,
             frame_id=self._frame_id
         )
     

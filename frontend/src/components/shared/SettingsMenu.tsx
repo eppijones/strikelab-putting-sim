@@ -19,7 +19,7 @@ interface SettingsMenuProps {
 
 export const SettingsMenu: React.FC<SettingsMenuProps> = ({ className = '' }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const { gameData, setHoleDistance, resetSession, showDistance, setShowDistance } = usePuttingState();
+  const { gameData, isConnected, setHoleDistance, resetSession, showDistance, setShowDistance } = usePuttingState();
   const { settings: soundSettings, toggleSound, setVolume, playSound } = useSound();
   
   const currentHoleDistance = gameData?.hole?.distance_m || 3.0;
@@ -29,6 +29,7 @@ export const SettingsMenu: React.FC<SettingsMenuProps> = ({ className = '' }) =>
   // Fetch current green speed on mount
   useEffect(() => {
     const fetchGreenSpeed = async () => {
+      if (!isConnected) return;
       try {
         const res = await fetch('http://localhost:8000/api/green-speed');
         if (res.ok) {
@@ -38,11 +39,11 @@ export const SettingsMenu: React.FC<SettingsMenuProps> = ({ className = '' }) =>
           }
         }
       } catch (e) {
-        console.error('Failed to fetch green speed:', e);
+        // Backend may still be starting; keep UI quiet and retry on reconnect.
       }
     };
     fetchGreenSpeed();
-  }, []);
+  }, [isConnected]);
   
   const handleGreenSpeedChange = async (preset: string) => {
     setGreenSpeed(preset);
@@ -54,7 +55,7 @@ export const SettingsMenu: React.FC<SettingsMenuProps> = ({ className = '' }) =>
       });
       playSound('click');
     } catch (e) {
-      console.error('Failed to set green speed:', e);
+      // Non-fatal: keep selected value in UI and let next successful update persist it.
     }
   };
   

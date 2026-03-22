@@ -51,3 +51,9 @@ Thumbs.db
 # Cursor IDE (keep rules)
 .cursor/*
 !.cursor/rules/
+
+# Local binary/package artifacts
+*.whl
+
+# TypeScript incremental build cache
+*.tsbuildinfo

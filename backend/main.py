@@ -11,9 +11,10 @@ import logging
 import time
 import threading
 from pathlib import Path
-from typing import Optional, Set
+from typing import Optional, Set, Any, Dict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, asdict
+from collections import deque
 
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -33,12 +34,36 @@ from .game_logic import GameLogic, get_game_logic, ShotResult as GameShotResult
 from .session import SessionManager, get_session_manager
 from .drills import DrillManager, get_drill_manager, DrillType
 
+# Multi-camera system
+from .cameras.camera_manager import CameraManager, CameraType
+from .tracking.ball_tracker_3d import BallTracker3D
+from .tracking.club_tracker import ClubTracker
+from .tracking.launch_detector import LaunchDetector
+from .tracking.sensor_fusion import SensorFusion, SensorFusionPolicy
+from .analysis.putting_analyzer import PuttingAnalyzer
+from .analysis.chipping_analyzer import ChippingAnalyzer
+from .cameras.arducam_source import find_arducam_device  # noqa: F401
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+ARDUCAM_TARGET_FPS = 75.0
+ARDUCAM_MIN_HEALTHY_FPS_RATIO = 0.70
+ARDUCAM_MAX_CONSECUTIVE_READ_FAILURES = 360  # ~3.0s at 120fps
+ARDUCAM_LOW_FPS_GRACE_S = 5.0
+ARDUCAM_RESTART_COOLDOWN_S = 5.0
+ARDUCAM_RESTART_ON_LOW_FPS = False
+ARDUCAM_LOW_FPS_WARN_COOLDOWN_S = 60.0
+STALE_MANUAL_CALIB_WARN_COOLDOWN_S = 30.0
+MAX_REASONABLE_LENS_K1 = 1.5
+MAX_REASONABLE_LENS_K2 = 2.0
+MAX_REASONABLE_LENS_K3 = 2.0
+MAX_REASONABLE_LENS_P1P2 = 0.25
+ARDUCAM_TELEMETRY_LOG_INTERVAL_S = 10.0
 
 
 @dataclass
@@ -140,6 +165,8 @@ class PuttingSimApp:
         # State
         self._running = False
         self._capture_thread: Optional[threading.Thread] = None
+        self._depth_reconnect_thread: Optional[threading.Thread] = None
+        self._depth_reconnect_interval_s: float = 10.0
         self._current_state: Optional[TrackerState] = None
         self._current_frame: Optional[np.ndarray] = None
         self._frame_id = 0
@@ -147,6 +174,9 @@ class PuttingSimApp:
         # Locked calibration for completed shots (prevents distance changing after STOPPED)
         self._shot_locked_ppm: Optional[float] = None
         self._last_shot_state: Optional[ShotState] = None
+        self._active_calibration_ppm: float = float(config.calibration.pixels_per_meter or 1150.0)
+        self._active_calibration_confidence: float = 0.0
+        self._active_calibration_source: str = "config"
         
         # Game logic and session tracking
         self.game_logic = get_game_logic()
@@ -160,10 +190,122 @@ class PuttingSimApp:
         self._proc_fps = FPSTracker()
         self._disp_fps = FPSTracker()
         self._last_proc_time = 0.0
+        self._last_proc_frame_age_ms = 0.0
+        self._proc_frame_age_ema_ms = 0.0
+
+        # Arducam low-latency handoff: capture thread writes latest frame, process thread consumes newest.
+        self._process_thread: Optional[threading.Thread] = None
+        self._arducam_latest_lock = threading.Lock()
+        self._arducam_latest_frame: Optional[FrameData] = None
+        self._arducam_frame_ready = threading.Event()
+        self._arducam_capture_count: int = 0
+        self._arducam_processed_count: int = 0
+        self._arducam_dropped_count: int = 0
+        self._arducam_backlog_peak: int = 0
+        self._arducam_last_capture_seq: int = 0
+        self._arducam_last_telemetry_log_s: float = 0.0
         
         # WebSocket clients
         self._ws_clients: Set[WebSocket] = set()
         self._ws_lock = asyncio.Lock()
+        
+        # --- Multi-camera system ---
+        mc_config = config.multi_camera
+        self.camera_manager = CameraManager(
+            enable_arducam=True,
+            enable_zed=mc_config.zed.enabled,
+            enable_realsense=mc_config.realsense.enabled,
+            arducam_device_id=config.camera.device_id,
+            arducam_replay_path=replay_path if camera_mode == CameraMode.REPLAY else None,
+            zed_serial=mc_config.zed.serial_number,
+            realsense_serial=mc_config.realsense.serial_number or None,
+            zed_settings={
+                "resolution": mc_config.zed.resolution,
+                "fps": mc_config.zed.fps,
+                "depth_mode": mc_config.zed.depth_mode,
+                "min_depth_m": mc_config.zed.min_depth_m,
+                "max_depth_m": mc_config.zed.max_depth_m,
+                "confidence_threshold": mc_config.zed.confidence_threshold,
+                "auto_exposure_gain": mc_config.zed.auto_exposure_gain,
+                "auto_white_balance": mc_config.zed.auto_white_balance,
+                "exposure": mc_config.zed.exposure,
+                "gain": mc_config.zed.gain,
+                "whitebalance_temperature": mc_config.zed.whitebalance_temperature,
+                "brightness": mc_config.zed.brightness,
+                "contrast": mc_config.zed.contrast,
+                "saturation": mc_config.zed.saturation,
+                "sharpness": mc_config.zed.sharpness,
+                "gamma": mc_config.zed.gamma,
+            },
+            realsense_settings={
+                "depth_width": mc_config.realsense.depth_width,
+                "depth_height": mc_config.realsense.depth_height,
+                "color_width": mc_config.realsense.color_width,
+                "color_height": mc_config.realsense.color_height,
+                "fps": mc_config.realsense.fps,
+                "depth_visual_preset": mc_config.realsense.depth_visual_preset,
+                "depth_auto_exposure": mc_config.realsense.depth_auto_exposure,
+                "emitter_enabled": mc_config.realsense.emitter_enabled,
+                "laser_power": mc_config.realsense.laser_power,
+                "enable_depth_post_processing": mc_config.realsense.enable_depth_post_processing,
+                "color_auto_exposure": mc_config.realsense.color_auto_exposure,
+                "color_exposure": mc_config.realsense.color_exposure,
+                "color_gain": mc_config.realsense.color_gain,
+                "color_auto_white_balance": mc_config.realsense.color_auto_white_balance,
+                "color_white_balance": mc_config.realsense.color_white_balance,
+                "color_sharpness": mc_config.realsense.color_sharpness,
+                "color_contrast": mc_config.realsense.color_contrast,
+                "color_saturation": mc_config.realsense.color_saturation,
+                "color_brightness": mc_config.realsense.color_brightness,
+            },
+        )
+        
+        # Depth camera trackers
+        self.ball_tracker_3d = BallTracker3D(
+            surface_height_m=mc_config.zed.surface_height_m,
+        )
+        self.club_tracker = ClubTracker(
+            surface_depth_m=mc_config.zed.surface_height_m,
+        )
+        self.launch_detector = LaunchDetector()
+        
+        # Sensor fusion
+        self.sensor_fusion = SensorFusion(pixels_per_meter=config.calibration.pixels_per_meter)
+        self._sync_sensor_fusion_policy()
+        self.putting_analyzer = PuttingAnalyzer()
+        self.chipping_analyzer = ChippingAnalyzer()
+        
+        # Multi-camera state
+        self._zed_frame: Optional[np.ndarray] = None
+        self._rs_frame: Optional[np.ndarray] = None
+        self._latest_fused_report = None
+        self._latest_shot_report = None
+        self._last_arducam_frame_monotonic_ns: Optional[int] = None
+        self._last_arducam_detection_monotonic_ns: Optional[int] = None
+        self._last_zed_detection_monotonic_ns: Optional[int] = None
+        self._last_realsense_detection_monotonic_ns: Optional[int] = None
+        self._ws_broadcast_seq: int = 0
+        self._arducam_consecutive_read_failures: int = 0
+        self._arducam_low_fps_since: Optional[float] = None
+        self._arducam_last_restart_monotonic_s: float = 0.0
+        self._arducam_last_low_fps_warn_monotonic_s: float = 0.0
+        self._arducam_target_fps: float = ARDUCAM_TARGET_FPS
+        self._last_stale_manual_calib_warn_monotonic_s: float = 0.0
+
+        # Startup readiness tracking
+        self._startup_phase: str = "starting"
+        self._startup_arducam_profile_info: Optional[str] = None
+        self._startup_sustained_fps: float = 0.0
+        self._startup_fail_reason: Optional[str] = None
+        
+        # Wire up fast putt speed resolution from depth cameras
+        def _resolve_fast_putt_speed(timestamp_ns):
+            resolved = self.sensor_fusion.resolve_fast_putt(timestamp_ns)
+            if resolved.confidence > 0.5 and resolved.source != "estimated":
+                return (resolved.vx_px_s, resolved.vy_px_s)
+            return None
+        
+        self.tracker.set_fast_putt_speed_callback(_resolve_fast_putt_speed)
         
         # Load calibration from config (config already loaded above)
         if config.calibration.is_valid():
@@ -183,79 +325,468 @@ class PuttingSimApp:
         
         lens_result = load_lens_calibration()
         if lens_result and lens_result.success:
-            self._camera_matrix = np.array(lens_result.camera_matrix)
-            self._dist_coeffs = np.array(lens_result.dist_coeffs)
-            self._lens_calibrated = True
-            logger.info(f"Lens calibration loaded (error: {lens_result.reprojection_error:.3f}px)")
+            camera_matrix = np.array(lens_result.camera_matrix)
+            dist_coeffs = np.array(lens_result.dist_coeffs)
+            if self._is_lens_calibration_plausible(dist_coeffs):
+                self._camera_matrix = camera_matrix
+                self._dist_coeffs = dist_coeffs
+                self._lens_calibrated = True
+                logger.info(f"Lens calibration loaded (error: {lens_result.reprojection_error:.3f}px)")
+            else:
+                self._lens_calibrated = False
+                logger.warning(
+                    "Lens calibration coefficients look unstable; disabling undistortion for this run. "
+                    "Running in fallback mode (no undistortion, conservative detector assumptions). "
+                    "Re-run lens calibration to restore correction."
+                )
         else:
             logger.info("No lens calibration - run 'python -m backend.lens_calibration --live' to calibrate")
     
+    def reset_all(self):
+        """Fully reset tracker, shot report, game analysis, and fusion caches."""
+        self.tracker.reset()
+        self._latest_shot_report = None
+        self._latest_fused_report = None
+        self._shot_locked_ppm = None
+        self._shot_analyzed = False
+        self.game_logic._last_analysis = None
+        self.ball_tracker_3d.reset()
+        self.club_tracker.reset()
+        self.launch_detector.reset()
+        self.sensor_fusion.reset()
+        logger.info("Full reset: tracker, shot report, game analysis, and fusion caches cleared")
+
+    def _sync_sensor_fusion_policy(self) -> None:
+        """Apply multi_camera config to SensorFusionPolicy."""
+        mc = get_config().multi_camera
+        self.sensor_fusion.set_policy(
+            SensorFusionPolicy(
+                enable_speed_fusion=getattr(mc, "enable_speed_fusion", True),
+                weight_arducam=float(getattr(mc, "fusion_weight_arducam", 0.5)),
+                weight_zed=float(getattr(mc, "fusion_weight_zed", 0.35)),
+                weight_realsense=float(getattr(mc, "fusion_weight_realsense", 0.15)),
+                speed_inconsistency_threshold_m_s=float(
+                    getattr(mc, "speed_inconsistency_threshold_m_s", 0.45)
+                ),
+                sync_tolerance_ms=int(getattr(mc, "sync_tolerance_ms", 20)),
+                enable_direction_fusion=bool(getattr(mc, "enable_direction_fusion", False)),
+                allow_realsense_speed_fusion=bool(getattr(mc, "allow_realsense_speed_fusion", False)),
+                sensor_direction_alignment_valid=bool(getattr(mc, "sensor_direction_alignment_valid", False)),
+            )
+        )
+
+    @staticmethod
+    def _is_expected_arducam_resolution(width: int, height: int) -> bool:
+        return abs(width - 1280) <= 64 and abs(height - 800) <= 64
+
+    @staticmethod
+    def _is_lens_calibration_plausible(dist_coeffs: np.ndarray) -> bool:
+        """
+        Guardrail: reject clearly overfit/unstable distortion coefficients that can
+        severely warp the live image. We can still track without lens correction.
+        """
+        coeffs = np.array(dist_coeffs, dtype=np.float64).reshape(-1)
+        if coeffs.size < 4:
+            return False
+
+        k1 = abs(float(coeffs[0]))
+        k2 = abs(float(coeffs[1]))
+        p1 = abs(float(coeffs[2]))
+        p2 = abs(float(coeffs[3]))
+        k3 = abs(float(coeffs[4])) if coeffs.size >= 5 else 0.0
+
+        return (
+            k1 <= MAX_REASONABLE_LENS_K1
+            and k2 <= MAX_REASONABLE_LENS_K2
+            and k3 <= MAX_REASONABLE_LENS_K3
+            and p1 <= MAX_REASONABLE_LENS_P1P2
+            and p2 <= MAX_REASONABLE_LENS_P1P2
+        )
+
+    def _start_primary_arducam_with_fallback(self, preferred_device_id: int) -> bool:
+        """
+        Start the primary Arducam with device-index fallback.
+
+        Tries the preferred device first (no separate probe scan).  Camera.start()
+        internally validates resolution & stereo detection, and also tries MSMF as
+        a fallback backend if DSHOW fps is low.  If the preferred device fails, we
+        iterate 0-7.
+        """
+        candidates = [preferred_device_id] + [
+            i for i in range(8) if i != preferred_device_id
+        ]
+
+        for device_id in candidates:
+            cam = Camera(
+                mode=self.camera_mode,
+                replay_path=self.replay_path,
+                device_id=device_id,
+            )
+            if not cam.start():
+                continue
+            w, h = cam.resolution
+            if self._is_expected_arducam_resolution(w, h):
+                self.camera = cam
+                logger.info(
+                    f"Primary Arducam started on device {device_id} at {w}x{h}"
+                )
+                return True
+            logger.warning(
+                f"Device {device_id} opened at {w}x{h} (not Arducam target); "
+                "trying next device"
+            )
+            cam.stop()
+
+        logger.error(
+            "No 1280x800 Arducam stream found on any device 0-7. "
+            "Check USB camera ordering/cables."
+        )
+        return False
+    
+    def _restart_primary_arducam(self, reason: str) -> bool:
+        """
+        Attempt a live Arducam restart while keeping the app running.
+        This improves robustness when UVC streams stall under USB load.
+        """
+        if self.camera_mode != CameraMode.ARDUCAM:
+            return False
+        now = time.monotonic()
+        if now - self._arducam_last_restart_monotonic_s < ARDUCAM_RESTART_COOLDOWN_S:
+            return False
+        self._arducam_last_restart_monotonic_s = now
+
+        logger.warning(f"Arducam recovery triggered: {reason}")
+        config = get_config()
+        try:
+            if self.camera:
+                self.camera.stop()
+        except Exception:
+            pass
+        self.camera = None
+        self._last_arducam_frame_monotonic_ns = None
+        self._arducam_consecutive_read_failures = 0
+        self._arducam_low_fps_since = None
+        self._arducam_last_low_fps_warn_monotonic_s = 0.0
+        self._cap_fps = FPSTracker()
+        self._proc_fps = FPSTracker()
+        self._arducam_capture_count = 0
+        self._arducam_processed_count = 0
+        self._arducam_dropped_count = 0
+        self._arducam_backlog_peak = 0
+        with self._arducam_latest_lock:
+            self._arducam_latest_frame = None
+
+        if not self._start_primary_arducam_with_fallback(config.camera.device_id):
+            logger.error("Arducam recovery failed; stream remains offline")
+            return False
+        logger.info("Arducam recovery succeeded")
+        return True
+
     def start(self):
         """Start camera capture and processing."""
         if self._running:
             return
-        
+
+        self._startup_phase = "cameras_init"
         logger.info(f"Starting PuttingSim with mode={self.camera_mode.value}")
-        
-        # Initialize camera
-        self.camera = Camera(
-            mode=self.camera_mode,
-            replay_path=self.replay_path
-        )
-        
-        if not self.camera.start():
-            logger.error("Failed to start camera")
-            return
-        
+        config = get_config()
+        if self.camera_mode == CameraMode.ARDUCAM:
+            if not self._start_primary_arducam_with_fallback(config.camera.device_id):
+                logger.error("Failed to start primary Arducam camera")
+                self._startup_phase = "error"
+                self._startup_fail_reason = "arducam_start_failed"
+                return
+        else:
+            self.camera = Camera(
+                mode=self.camera_mode,
+                replay_path=self.replay_path,
+                device_id=config.camera.device_id,
+            )
+            if not self.camera.start():
+                logger.error("Failed to start camera")
+                self._startup_phase = "error"
+                self._startup_fail_reason = "camera_start_failed"
+                return
+
+        # Store Arducam profile info for telemetry
+        if self.camera:
+            w, h = self.camera.resolution
+            sustained = getattr(self.camera, '_sustained_startup_fps', 0.0)
+            self._startup_arducam_profile_info = f"{w}x{h}"
+            self._startup_sustained_fps = sustained
+
+        self._startup_phase = "camera_ready"
+        logger.info("Camera initialisation complete — starting processing threads")
+
         self._running = True
-        
-        # Start capture thread
-        self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._cap_fps = FPSTracker()
+        self._proc_fps = FPSTracker()
+        self._arducam_capture_count = 0
+        self._arducam_processed_count = 0
+        self._arducam_dropped_count = 0
+        self._arducam_backlog_peak = 0
+        self._last_proc_frame_age_ms = 0.0
+        self._proc_frame_age_ema_ms = 0.0
+        with self._arducam_latest_lock:
+            self._arducam_latest_frame = None
+        self._arducam_frame_ready.clear()
+
+        # Start primary Arducam capture + processing threads.
+        self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True, name="cam-arducam-capture")
         self._capture_thread.start()
+        self._process_thread = threading.Thread(target=self._process_loop, daemon=True, name="cam-arducam-process")
+        self._process_thread.start()
         
-        logger.info("PuttingSim started")
+        # Start depth cameras via CameraManager (non-blocking, graceful degradation)
+        self._start_depth_cameras()
+        self._start_depth_reconnect_worker()
+
+        self._startup_phase = "running"
+        logger.info("PuttingSim started — startup_phase=running")
+    
+    def _start_depth_cameras(self):
+        """Start ZED and RealSense cameras in background. Failures are non-fatal."""
+        config = get_config()
+        mc = config.multi_camera
+        
+        # Register callbacks for depth camera frames
+        def on_zed_frame(frame):
+            self._process_zed_frame(frame)
+        
+        def on_rs_frame(frame):
+            self._process_realsense_frame(frame)
+        
+        if mc.zed.enabled:
+            self.camera_manager.on_frame(CameraType.ZED, on_zed_frame)
+        if mc.realsense.enabled:
+            self.camera_manager.on_frame(CameraType.REALSENSE, on_rs_frame)
+        
+        # Start depth cameras through CameraManager so status + sync buffers stay accurate.
+        start_types = []
+        if mc.zed.enabled:
+            start_types.append(CameraType.ZED)
+        if mc.realsense.enabled:
+            start_types.append(CameraType.REALSENSE)
+        results = self.camera_manager.start_selected(start_types)
+        if mc.zed.enabled and not results.get(CameraType.ZED, False):
+            logger.warning("ZED 2i failed to start - continuing without it")
+        if mc.realsense.enabled and not results.get(CameraType.REALSENSE, False):
+            logger.warning("RealSense D455 failed to start - continuing without it")
+        
+        active = [ct.value for ct, ok in results.items() if ok]
+        if active:
+            logger.info(f"Depth cameras active: {', '.join(active)}")
+        else:
+            logger.info("No depth cameras active - running with Arducam only")
+
+    def _start_depth_reconnect_worker(self) -> None:
+        if self._depth_reconnect_thread and self._depth_reconnect_thread.is_alive():
+            return
+        self._depth_reconnect_thread = threading.Thread(
+            target=self._depth_reconnect_loop,
+            daemon=True,
+            name="cam-depth-reconnect",
+        )
+        self._depth_reconnect_thread.start()
+
+    def _depth_reconnect_loop(self) -> None:
+        """
+        Keep trying to bring up enabled depth cameras that failed at startup.
+        This makes camera bring-up resilient to USB timing/driver init order.
+        """
+        while self._running:
+            time.sleep(self._depth_reconnect_interval_s)
+            if not self._running:
+                break
+            try:
+                mc = get_config().multi_camera
+                to_start = []
+                if mc.zed.enabled:
+                    zed_src = self.camera_manager.get_source(CameraType.ZED)
+                    if zed_src and not zed_src.is_running:
+                        to_start.append(CameraType.ZED)
+                if mc.realsense.enabled:
+                    rs_src = self.camera_manager.get_source(CameraType.REALSENSE)
+                    if rs_src and not rs_src.is_running:
+                        to_start.append(CameraType.REALSENSE)
+                if not to_start:
+                    continue
+                results = self.camera_manager.start_selected(to_start)
+                for ct, ok in results.items():
+                    if ok:
+                        logger.info(f"{ct.value} recovered and is now active")
+            except Exception as e:
+                logger.debug(f"Depth reconnect loop error: {e}")
+    
+    def _depth_capture_loop(self, camera_type: CameraType):
+        """Capture loop for a depth camera."""
+        source = self.camera_manager.get_source(camera_type)
+        if not source:
+            return
+        while self._running and source.is_running:
+            frame = source.read_frame()
+            if frame is None:
+                continue
+            source.mark_frame_received()
+            for cb in self.camera_manager._callbacks.get(camera_type, []):
+                try:
+                    cb(frame)
+                except Exception as e:
+                    logger.error(f"Depth camera callback error ({camera_type.value}): {e}")
     
     def stop(self):
         """Stop capture and cleanup."""
         self._running = False
+        self._arducam_frame_ready.set()
         
         if self.camera:
             self.camera.stop()
         
+        # Stop depth cameras + join their capture threads.
+        self.camera_manager.stop()
+        if self._depth_reconnect_thread:
+            self._depth_reconnect_thread.join(timeout=2.0)
+            self._depth_reconnect_thread = None
+        
         if self._capture_thread:
             self._capture_thread.join(timeout=2.0)
+        if self._process_thread:
+            self._process_thread.join(timeout=2.0)
         
         logger.info("PuttingSim stopped")
     
     def _capture_loop(self):
-        """Main capture and processing loop (runs in separate thread)."""
+        """Arducam capture loop: always keep freshest frame."""
+        last_watchdog_check = time.monotonic()
         while self._running:
+            # Watchdog: restart process thread if it died
+            now_mono = time.monotonic()
+            if now_mono - last_watchdog_check > 2.0:
+                last_watchdog_check = now_mono
+                if self._process_thread and not self._process_thread.is_alive():
+                    logger.warning("Process thread died — restarting it")
+                    self._process_thread = threading.Thread(
+                        target=self._process_loop, daemon=True, name="cam-arducam-process"
+                    )
+                    self._process_thread.start()
+
+            if self.camera is None:
+                time.sleep(0.01)
+                continue
             frame_data = self.camera.read_frame()
+            if frame_data is not None:
+                self._last_arducam_frame_monotonic_ns = time.monotonic_ns()
+                self._arducam_consecutive_read_failures = 0
             
             if frame_data is None:
                 if self.camera_mode == CameraMode.REPLAY:
                     logger.info("Replay finished")
                     self._running = False
+                elif self.camera_mode == CameraMode.ARDUCAM:
+                    self._arducam_consecutive_read_failures += 1
+                    if self._arducam_consecutive_read_failures >= ARDUCAM_MAX_CONSECUTIVE_READ_FAILURES:
+                        self._restart_primary_arducam(
+                            reason=f"no frames for {self._arducam_consecutive_read_failures} reads"
+                        )
                 continue
-            
-            # Track capture FPS
+
+            self._arducam_capture_count += 1
+
+            # Track capture FPS and health.
             cap_fps = self._cap_fps.tick()
-            
-            # Process frame
-            proc_start = time.time()
-            self._process_frame(frame_data)
-            proc_time = (time.time() - proc_start) * 1000
-            
-            # Track processing FPS
-            proc_fps = self._proc_fps.tick()
-            
-            self._last_proc_time = proc_time
-            self._frame_id = frame_data.frame_id
-            # Store undistorted frame for video streaming
-            if self._lens_calibrated and self._undistort_map1 is not None:
-                self._current_frame = cv2.remap(frame_data.frame, self._undistort_map1, self._undistort_map2, cv2.INTER_LINEAR)
-            else:
-                self._current_frame = frame_data.frame
+            if self.camera_mode == CameraMode.ARDUCAM:
+                min_healthy_fps = max(1.0, self._arducam_target_fps * ARDUCAM_MIN_HEALTHY_FPS_RATIO)
+                if cap_fps > 0 and cap_fps < min_healthy_fps:
+                    if self._arducam_low_fps_since is None:
+                        self._arducam_low_fps_since = time.monotonic()
+                    elif (time.monotonic() - self._arducam_low_fps_since) > ARDUCAM_LOW_FPS_GRACE_S:
+                        if ARDUCAM_RESTART_ON_LOW_FPS:
+                            self._restart_primary_arducam(
+                                reason=f"capture fps degraded to {cap_fps:.1f} (< {min_healthy_fps:.1f})"
+                            )
+                        else:
+                            now = time.monotonic()
+                            if (now - self._arducam_last_low_fps_warn_monotonic_s) > ARDUCAM_LOW_FPS_WARN_COOLDOWN_S:
+                                self._arducam_last_low_fps_warn_monotonic_s = now
+                                logger.warning(
+                                    f"Arducam capture FPS is below target ({cap_fps:.1f} < {min_healthy_fps:.1f}) "
+                                    "but stream is stable; skipping auto-restart"
+                                )
+                else:
+                    self._arducam_low_fps_since = None
+
+            with self._arducam_latest_lock:
+                if self._arducam_latest_frame is not None:
+                    self._arducam_dropped_count += 1
+                self._arducam_latest_frame = frame_data
+                backlog = max(0, self._arducam_capture_count - self._arducam_processed_count)
+                self._arducam_backlog_peak = max(self._arducam_backlog_peak, backlog)
+            self._arducam_frame_ready.set()
+
+    def _process_loop(self):
+        """Arducam processing loop: consume newest available frame only."""
+        consecutive_errors = 0
+        while self._running:
+            try:
+                if not self._arducam_frame_ready.wait(timeout=0.050):
+                    continue
+                frame_data: Optional[FrameData] = None
+                with self._arducam_latest_lock:
+                    frame_data = self._arducam_latest_frame
+                    self._arducam_latest_frame = None
+                    self._arducam_frame_ready.clear()
+                if frame_data is None:
+                    continue
+
+                proc_start = time.time()
+                self._process_frame(frame_data)
+                self._last_proc_time = (time.time() - proc_start) * 1000
+                self._proc_fps.tick()
+                self._arducam_processed_count += 1
+                self._frame_id = frame_data.frame_id
+                self._last_proc_frame_age_ms = (
+                    time.monotonic_ns() - frame_data.acquisition_monotonic_ns
+                ) / 1e6
+                if self._proc_frame_age_ema_ms <= 0.0:
+                    self._proc_frame_age_ema_ms = self._last_proc_frame_age_ms
+                else:
+                    self._proc_frame_age_ema_ms = (
+                        0.9 * self._proc_frame_age_ema_ms + 0.1 * self._last_proc_frame_age_ms
+                    )
+                self._log_arducam_telemetry()
+                consecutive_errors = 0
+            except Exception as e:
+                consecutive_errors += 1
+                if consecutive_errors <= 3:
+                    logger.error(f"Process loop error (#{consecutive_errors}): {e}", exc_info=True)
+                elif consecutive_errors == 4:
+                    logger.error("Suppressing further process loop error details")
+                if consecutive_errors > 100:
+                    time.sleep(0.01)
+
+    def _log_arducam_telemetry(self):
+        now = time.monotonic()
+        if (now - self._arducam_last_telemetry_log_s) < ARDUCAM_TELEMETRY_LOG_INTERVAL_S:
+            return
+        self._arducam_last_telemetry_log_s = now
+        backlog = max(0, self._arducam_capture_count - self._arducam_processed_count)
+        logger.info(
+            "Arducam telemetry: capture_fps=%.1f, tracker_fps=%.1f, dropped=%d, backlog=%d, "
+            "frame_age_ms(avg)=%.1f, frame_age_ms(last)=%.1f",
+            self._fps_snapshot(self._cap_fps),
+            self._fps_snapshot(self._proc_fps),
+            self._arducam_dropped_count,
+            backlog,
+            self._proc_frame_age_ema_ms,
+            self._last_proc_frame_age_ms,
+        )
+
+    @staticmethod
+    def _fps_snapshot(tracker: FPSTracker) -> float:
+        if len(tracker.timestamps) < 2:
+            return 0.0
+        dt = tracker.timestamps[-1] - tracker.timestamps[0]
+        return (len(tracker.timestamps) - 1) / dt if dt > 0 else 0.0
     
     def _process_frame(self, frame_data: FrameData):
         """Process a single frame."""
@@ -274,8 +805,13 @@ class PuttingSimApp:
             # Fast undistortion using precomputed maps
             frame = cv2.remap(frame, self._undistort_map1, self._undistort_map2, cv2.INTER_LINEAR)
         
+        # Store undistorted frame for video streaming (avoids double remap)
+        self._current_frame = frame
+        
         # Detect ball on undistorted frame
         detection = self.detector.detect(frame)
+        if detection is not None:
+            self._last_arducam_detection_monotonic_ns = time.monotonic_ns()
         
         # Update tracker with frame for background model motion detection
         self._current_state = self.tracker.update(
@@ -291,9 +827,22 @@ class PuttingSimApp:
         
         # Lock calibration at TRACKING start (not STOPPED) to prevent mid-shot drift
         if current_state == ShotState.TRACKING and self._shot_locked_ppm is None:
-            self._shot_locked_ppm = self.get_pixels_per_meter()
+            current_ppm = self.get_pixels_per_meter()
+            if self._active_calibration_confidence < 0.5:
+                logger.warning(
+                    "Calibration confidence too low at shot start (source=%s, conf=%.2f); "
+                    "distance metrics may be unreliable",
+                    self._active_calibration_source,
+                    self._active_calibration_confidence,
+                )
+            self._shot_locked_ppm = current_ppm
             self.tracker.set_calibration(self._shot_locked_ppm)
-            logger.info(f"Calibration locked at TRACKING start: {self._shot_locked_ppm:.1f} px/m")
+            logger.info(
+                "Calibration locked at TRACKING start: %.1f px/m (source=%s, conf=%.2f)",
+                self._shot_locked_ppm,
+                self._active_calibration_source,
+                self._active_calibration_confidence,
+            )
         elif current_state == ShotState.ARMED:
             # Reset lock when returning to ARMED (ready for new shot)
             self._shot_locked_ppm = None
@@ -309,6 +858,14 @@ class PuttingSimApp:
             if self.auto_calibrator.is_calibrated and current_state == ShotState.ARMED:
                 self.tracker.set_calibration(self.auto_calibrator.pixels_per_meter)
         
+        # Notify sensor fusion on shot lifecycle transitions
+        if current_state == ShotState.TRACKING and self._previous_game_state != ShotState.TRACKING:
+            self.sensor_fusion.on_shot_start(frame_data.timestamp_ns)
+            self.sensor_fusion.set_calibration(
+                self.get_pixels_per_meter(),
+                getattr(get_config().calibration, 'forward_direction_deg', 0.0),
+            )
+        
         # Analyze shot when transitioning to STOPPED
         if (current_state == ShotState.STOPPED and 
             self._previous_game_state != ShotState.STOPPED and
@@ -316,9 +873,13 @@ class PuttingSimApp:
             self._analyze_completed_shot()
             self._shot_analyzed = True
         
-        # Reset shot analyzed flag when returning to ARMED
+        # Reset shot analyzed flag and depth trackers when returning to ARMED
         if current_state == ShotState.ARMED:
             self._shot_analyzed = False
+            if self._previous_game_state == ShotState.COOLDOWN:
+                self.ball_tracker_3d.reset()
+                self.club_tracker.reset()
+                self.launch_detector.reset()
         
         # Track previous state for transition detection
         self._previous_game_state = current_state
@@ -347,6 +908,7 @@ class PuttingSimApp:
                 direction_deg=shot_data['direction_deg']
             )
             logger.info(f"Drill attempt recorded: distance={shot_data['distance_m']:.2f}m")
+            self._build_fused_shot_report(shot_data)
             return  # Don't also record as regular session shot during drills
         
         # Analyze the shot against the hole
@@ -365,38 +927,180 @@ class PuttingSimApp:
                 f"made={self.session_manager.get_putts_made()}/{self.session_manager.get_total_putts()} "
                 f"({self.session_manager.get_make_percentage():.1f}%)"
             )
+        
+        # Build fused shot report from multi-camera data
+        self._build_fused_shot_report(shot_data)
+    
+    def _build_fused_shot_report(self, shot_data: dict):
+        """Build a fused shot report combining all camera data."""
+        try:
+            mc = get_config().multi_camera
+            fused = self.sensor_fusion.build_shot_report(
+                ball_speed_m_s=shot_data['speed_m_s'],
+                distance_m=shot_data['distance_m'],
+                direction_deg=shot_data['direction_deg'],
+                shot_timestamp_ns=int(time.time_ns()),
+                require_all_cameras_for_official=getattr(
+                    mc, "require_all_cameras_for_recorded_putts", False
+                ),
+            )
+            
+            trajectory = []
+            if self._current_state and self._current_state.shot_result:
+                trajectory = self._current_state.shot_result.trajectory
+            
+            if fused.shot_type == "chip":
+                self._latest_shot_report = self.chipping_analyzer.analyze(
+                    fused, trajectory,
+                    self.ball_tracker_3d.get_trajectory(),
+                    self.sensor_fusion.shot_ball_states,
+                    self.get_pixels_per_meter(),
+                )
+            else:
+                self._latest_shot_report = self.putting_analyzer.analyze(
+                    fused, trajectory, self.get_pixels_per_meter(),
+                )
+            
+            # Propagate fast-putt flags from tracker into fused report
+            if self._current_state and self._current_state.shot_result:
+                sr = self._current_state.shot_result
+                fused.fast_putt_estimated = sr.fast_putt_estimated
+                if sr.fast_putt_estimated:
+                    fused.fast_putt_resolved = False
+
+            self._latest_fused_report = fused
+            
+            cameras = ', '.join(fused.cameras_used)
+            logger.info(
+                "Fused shot report: type=%s, cameras=[%s], primary=%s, fusion_accepted=%s, reject_reason=%s",
+                fused.shot_type,
+                cameras,
+                fused.primary_source,
+                fused.fusion_accepted,
+                fused.fusion_rejected_reason,
+            )
+            
+            # Reset depth trackers for next shot
+            self.ball_tracker_3d.reset()
+            self.club_tracker.reset()
+            self.launch_detector.reset()
+            self.sensor_fusion.on_shot_end()
+        except Exception as e:
+            logger.error(f"Error building fused shot report: {e}")
+    
+    def _process_zed_frame(self, frame):
+        """Process a frame from the ZED 2i camera (runs in ZED thread)."""
+        try:
+            self._zed_frame = frame.color
+            
+            # Skip processing if no depth available
+            if frame.depth is None:
+                return
+            
+            current_state = self._current_state
+            ball_in_motion = (current_state is not None and
+                              current_state.state in (ShotState.TRACKING, ShotState.VIRTUAL_ROLLING))
+            
+            # 3D ball tracking
+            ball_3d = self.ball_tracker_3d.update(
+                frame.color, frame.depth, frame.point_cloud, frame.timestamp_ns,
+            )
+            if ball_3d.position:
+                self._last_zed_detection_monotonic_ns = time.monotonic_ns()
+                self.sensor_fusion.feed_ball_3d(ball_3d)
+                # Update club tracker with ball position
+                self.club_tracker.set_ball_position(
+                    ball_3d.position.px_x, ball_3d.position.px_y,
+                    (ball_3d.position.x, ball_3d.position.y, ball_3d.position.z),
+                )
+            
+            # Club tracking
+            club_metrics = self.club_tracker.update(
+                frame.color, frame.depth, frame.point_cloud,
+                frame.timestamp_ns, ball_in_motion,
+            )
+            if club_metrics:
+                self.sensor_fusion.feed_club_metrics(club_metrics)
+                
+        except Exception as e:
+            logger.debug(f"ZED processing error: {e}")
+    
+    def _process_realsense_frame(self, frame):
+        """Process a frame from the RealSense D455 camera (runs in RS thread)."""
+        try:
+            self._rs_frame = frame.color
+            
+            if frame.depth is None:
+                return
+            
+            current_state = self._current_state
+            ball_in_motion = (current_state is not None and
+                              current_state.state in (ShotState.TRACKING, ShotState.VIRTUAL_ROLLING))
+            
+            launch_data = self.launch_detector.update(
+                frame.color, frame.depth, frame.timestamp_ns, ball_in_motion,
+            )
+            if launch_data:
+                self._last_realsense_detection_monotonic_ns = time.monotonic_ns()
+                self.sensor_fusion.feed_launch_data(launch_data)
+                
+        except Exception as e:
+            logger.debug(f"RealSense processing error: {e}")
     
     def get_pixels_per_meter(self) -> float:
         """
-        Get the best available pixels_per_meter value.
-        Priority: manual override > auto-calibration > homography calibration > default
-        Applies distance_scale_factor from config for fine-tuning.
+        Single source of truth for calibration scale.
+        Priority: high-confidence auto > manual override > homography > config/default.
         """
         config = get_config()
-        
-        # Check for manual override first (most reliable if user has measured)
-        manual_ppm = getattr(config.calibration, 'manual_pixels_per_meter', 0.0)
-        if manual_ppm and manual_ppm > 0:
-            base_ppm = manual_ppm
-        elif self.auto_calibrator.is_calibrated:
-            base_ppm = self.auto_calibrator.pixels_per_meter
-        elif self.calibrator.is_calibrated:
-            base_ppm = self.calibrator.pixels_per_meter
+
+        auto_ppm = self.auto_calibrator.pixels_per_meter if self.auto_calibrator.is_calibrated else 0.0
+        auto_conf = self.auto_calibrator.confidence if self.auto_calibrator.is_calibrated else 0.0
+        manual_ppm = float(getattr(config.calibration, "manual_pixels_per_meter", 0.0) or 0.0)
+
+        if auto_ppm > 0 and auto_conf >= 0.88:
+            self._active_calibration_ppm = auto_ppm
+            self._active_calibration_confidence = auto_conf
+            self._active_calibration_source = "auto"
+            if manual_ppm > 0 and abs(auto_ppm - manual_ppm) / auto_ppm > 0.08:
+                if not getattr(self, '_stale_manual_calib_warned', False):
+                    self._stale_manual_calib_warned = True
+                    logger.warning(
+                        "Manual calibration appears stale and is ignored this run: manual=%.1f px/m, auto=%.1f px/m. "
+                        "Consider clearing manual_pixels_per_meter from config.json.",
+                        manual_ppm,
+                        auto_ppm,
+                    )
+        elif manual_ppm > 0:
+            self._active_calibration_ppm = manual_ppm
+            self._active_calibration_confidence = 0.95
+            self._active_calibration_source = "manual"
+        elif self.calibrator.is_calibrated and self.calibrator.pixels_per_meter > 0:
+            self._active_calibration_ppm = self.calibrator.pixels_per_meter
+            self._active_calibration_confidence = 0.7
+            self._active_calibration_source = "homography"
+        elif config.calibration.pixels_per_meter > 0:
+            self._active_calibration_ppm = float(config.calibration.pixels_per_meter)
+            self._active_calibration_confidence = 0.5
+            self._active_calibration_source = "config"
         else:
-            # Fallback default (approximate for 80cm height, 70° FOV)
-            base_ppm = 1150.0
-        
-        # Apply distance scale factor from config (for real-world calibration adjustment)
-        # If scale_factor > 1.0, distances will be larger (compensates for underestimate)
-        # Dividing ppm by scale_factor has same effect as multiplying distance by scale_factor
+            self._active_calibration_ppm = 1150.0
+            self._active_calibration_confidence = 0.0
+            self._active_calibration_source = "fallback"
+
         scale_factor = getattr(config.calibration, 'distance_scale_factor', 1.0)
         if scale_factor and scale_factor != 1.0:
-            return base_ppm / scale_factor
-        return base_ppm
+            return self._active_calibration_ppm / scale_factor
+        return self._active_calibration_ppm
     
     def get_state_message(self) -> dict:
         """Build state message for WebSocket."""
         state = self._current_state
+        self._ws_broadcast_seq += 1
+        mc = get_config().multi_camera
+        _n = max(1, int(getattr(mc, "ws_broadcast_lightweight_every_n", 2)))
+        lightweight = (self._ws_broadcast_seq % _n) != 0
+        traj_limit = 8 if lightweight else 50
         
         # Use locked calibration if available (set at TRACKING start), otherwise get fresh value
         # This prevents distance drift during and after shots
@@ -460,7 +1164,7 @@ class PuttingSimApp:
                 "speed_px_s": round(es.speed, 1),
                 "direction_deg": round(es.direction_deg, 2),
                 "curvature": round(es.curvature, 4),
-                "trajectory_before_exit": es.trajectory_before_exit[-50:]  # Last 50 points
+                "trajectory_before_exit": es.trajectory_before_exit[-traj_limit:],
             }
         
         # Prediction data (when ball exits frame or after shot)
@@ -473,8 +1177,9 @@ class PuttingSimApp:
                     exit_velocity=(state.velocity.vx, state.velocity.vy)
                 )
                 if prediction:
+                    pred_lim = 12 if lightweight else 50
                     prediction_data = {
-                        "trajectory": [(p.x, p.y) for p in prediction.trajectory[:50]],
+                        "trajectory": [(p.x, p.y) for p in prediction.trajectory[:pred_lim]],
                         "final_position": prediction.final_position,
                         "final_time_s": round(prediction.final_time, 2),
                         "exit_speed_px_s": round(prediction.initial_speed, 1)
@@ -523,17 +1228,30 @@ class PuttingSimApp:
                 "frames_to_tracking": result.frames_to_tracking,
                 "frames_to_speed": result.frames_to_speed,
                 "duration_ms": round(result.duration_ms, 1),
-                "trajectory": result.trajectory[-50:],  # Last 50 points
-                "exited_frame": bool(result.exited_frame)
+                "trajectory": result.trajectory[-traj_limit:],
+                "exited_frame": bool(result.exited_frame),
+                "fast_putt_estimated": bool(result.fast_putt_estimated),
+                "shot_confidence": round(float(getattr(result, "shot_confidence", 0.0)), 3),
             }
         
-        # Metrics
+        # Metrics (cap_fps tick once; passed into multi_camera for Arducam tile)
+        cap_fps_val = round(self._fps_snapshot(self._cap_fps), 1)
+        proc_fps_val = round(self._fps_snapshot(self._proc_fps), 1)
+        backlog = max(0, self._arducam_capture_count - self._arducam_processed_count)
         metrics = {
-            "cap_fps": round(self._cap_fps.tick(), 1),
-            "proc_fps": round(self._proc_fps.tick(), 1),
+            "cap_fps": cap_fps_val,
+            "proc_fps": proc_fps_val,
             "disp_fps": round(self._disp_fps.tick(), 1),
             "proc_latency_ms": round(self._last_proc_time, 2),
-            "idle_stddev": round(state.idle_stddev, 2) if state else 0.0
+            "frame_age_ms": round(self._last_proc_frame_age_ms, 2),
+            "frame_age_avg_ms": round(self._proc_frame_age_ema_ms, 2),
+            "queue_backlog": backlog,
+            "dropped_frames": self._arducam_dropped_count,
+            "idle_stddev": round(state.idle_stddev, 2) if state else 0.0,
+            "startup_phase": self._startup_phase,
+            "startup_arducam_profile": self._startup_arducam_profile_info,
+            "startup_sustained_fps": round(self._startup_sustained_fps, 1),
+            "startup_fail_reason": self._startup_fail_reason,
         }
         
         # Get overlay_radius_scale from config (for UI display only)
@@ -557,12 +1275,129 @@ class PuttingSimApp:
             "auto_calibrated": self.auto_calibrator.is_calibrated,
             "lens_calibrated": self._lens_calibrated,
             "pixels_per_meter": round(pixels_per_meter, 1),
+            "calibration_source": self._active_calibration_source,
+            "calibration_confidence": round(self._active_calibration_confidence, 3),
             "overlay_radius_scale": overlay_radius_scale,
             "resolution": list(self.camera.resolution) if self.camera else [1280, 800],
+            "ready_status": state.ready_status if state else "no_ball",
             # Game logic and session data
             "game": self.game_logic.get_state_for_websocket(),
             "session": self.session_manager.get_state_for_websocket(),
-            "drill": self.drill_manager.get_state()
+            "drill": self.drill_manager.get_state(),
+            # Multi-camera data
+            "multi_camera": self._get_multi_camera_state(arducam_fps=cap_fps_val),
+        }
+    
+    def _get_multi_camera_state(self, arducam_fps: float = 0.0) -> dict:
+        """Build multi-camera state for WebSocket."""
+        cameras: Dict[str, Any] = {}
+        # Primary Arducam (legacy Camera path — not CameraManager ArducamSource)
+        age_ms = None
+        if self._last_arducam_frame_monotonic_ns is not None:
+            age_ms = (time.monotonic_ns() - self._last_arducam_frame_monotonic_ns) / 1e6
+        cameras["arducam"] = {
+            "type": "arducam",
+            "connected": bool(self.camera),
+            "running": bool(self.camera and self.camera.is_running),
+            "fps": round(arducam_fps, 1),
+            "resolution": list(self.camera.resolution) if self.camera else [0, 0],
+            "error": self._startup_fail_reason,
+            "frame_count": self._frame_id,
+            "target_fps": round(self._arducam_target_fps, 1),
+            "min_healthy_fps": round(self._arducam_target_fps * ARDUCAM_MIN_HEALTHY_FPS_RATIO, 1),
+            "consecutive_read_failures": self._arducam_consecutive_read_failures,
+            "capture_count": self._arducam_capture_count,
+            "processed_count": self._arducam_processed_count,
+            "dropped_frames": self._arducam_dropped_count,
+            "queue_backlog": max(0, self._arducam_capture_count - self._arducam_processed_count),
+            "tracker_contribution": True,
+            "startup_profile": self._startup_arducam_profile_info,
+            "sustained_startup_fps": round(self._startup_sustained_fps, 1),
+        }
+        if age_ms is not None:
+            cameras["arducam"]["last_frame_age_ms"] = round(age_ms, 2)
+        if self._last_arducam_detection_monotonic_ns is not None:
+            cameras["arducam"]["last_detection_age_ms"] = round(
+                (time.monotonic_ns() - self._last_arducam_detection_monotonic_ns) / 1e6,
+                2,
+            )
+        if self.camera:
+            cameras["arducam"]["driver_reported_fps"] = round(self.camera.reported_fps, 1)
+        for ct in (CameraType.ZED, CameraType.REALSENSE):
+            src = self.camera_manager.get_source(ct)
+            if src:
+                cameras[ct.value] = src.status().to_dict()
+                if ct == CameraType.ZED:
+                    cameras[ct.value]["tracker_contribution"] = bool(self._last_zed_detection_monotonic_ns is not None)
+                    if self._last_zed_detection_monotonic_ns is not None:
+                        cameras[ct.value]["last_detection_age_ms"] = round(
+                            (time.monotonic_ns() - self._last_zed_detection_monotonic_ns) / 1e6,
+                            2,
+                        )
+                else:
+                    cameras[ct.value]["tracker_contribution"] = bool(self._last_realsense_detection_monotonic_ns is not None)
+                    if self._last_realsense_detection_monotonic_ns is not None:
+                        cameras[ct.value]["last_detection_age_ms"] = round(
+                            (time.monotonic_ns() - self._last_realsense_detection_monotonic_ns) / 1e6,
+                            2,
+                        )
+        
+        # Latest fused shot report
+        shot_report = None
+        if self._latest_shot_report:
+            shot_report = self._latest_shot_report.to_dict()
+        
+        # Club tracker state
+        club_state = {
+            "stroke_phase": self.club_tracker.stroke_phase.value,
+        }
+        latest_club = self.club_tracker.get_latest_metrics()
+        if latest_club:
+            club_state["metrics"] = latest_club.to_dict()
+        
+        # Rollup: all three present and recently received frames
+        want = ("arducam", "zed", "realsense")
+        all_ok = all(
+            k in cameras and bool(cameras[k].get("connected")) and bool(cameras[k].get("running"))
+            for k in want
+        )
+        stale = False
+        max_age = 0.0
+        for k in want:
+            st = cameras.get(k) or {}
+            a = st.get("last_frame_age_ms")
+            if a is not None:
+                max_age = max(max_age, float(a))
+                if float(a) > 500.0:
+                    stale = True
+            elif st.get("running"):
+                # Running camera without frame-age telemetry yet should not be treated as healthy.
+                stale = True
+        system_health = {
+            "all_streams_reporting": all_ok,
+            "max_last_frame_age_ms": round(max_age, 2) if max_age else None,
+            "stale_warning": stale,
+        }
+
+        current_state = self._current_state
+        game_state = current_state.state.value if current_state else "armed"
+        tracking_activity = {
+            "game_state": game_state,
+            "arducam_ball_tracking": bool(
+                current_state
+                and current_state.ball_x is not None
+                and current_state.state in (ShotState.TRACKING, ShotState.VIRTUAL_ROLLING)
+            ),
+            "zed_club_phase": self.club_tracker.stroke_phase.value,
+            "realsense_launch_active": bool(getattr(self.launch_detector, "_tracking_active", False)),
+        }
+
+        return {
+            "cameras": cameras,
+            "shot_report": shot_report,
+            "club": club_state,
+            "system_health": system_health,
+            "tracking_activity": tracking_activity,
         }
     
     async def broadcast_state(self):
@@ -672,61 +1507,162 @@ async def root():
 
 @app.get("/api/video")
 async def video_feed():
-    """MJPEG video stream for viewing camera output at ~60fps with low latency."""
+    """MJPEG video stream for viewing camera output (low fps to avoid starving tracker)."""
     
     def generate_frames():
         import cv2
         sim = get_app_instance()
-        last_frame_time = 0
+        last_frame_time = 0.0
+        last_frame_ref = None
+        TARGET_FPS = 15
         
         while sim._running:
-            # Increased to ~60fps for lower perceived latency
             now = time.time()
-            if now - last_frame_time < 1/60:
-                time.sleep(0.002)
+            dt = now - last_frame_time
+            if dt < 1 / TARGET_FPS:
+                time.sleep(max(0.001, 1 / TARGET_FPS - dt))
                 continue
             last_frame_time = now
             
-            if sim._current_frame is not None:
-                frame = sim._current_frame.copy()
+            ref = sim._current_frame
+            if ref is not None:
+                last_frame_ref = ref
+                frame = ref.copy()
                 
-                # Draw ball detection overlay
                 state = sim._current_state
                 if state and state.ball_x is not None:
                     cx, cy = round(state.ball_x), round(state.ball_y)
                     radius = int(state.ball_radius or 15)
                     
-                    # Color based on state
-                    color = (0, 255, 0)  # Green for ARMED
+                    color = (0, 255, 0)
                     if state.state.value == "TRACKING":
-                        color = (0, 0, 255)  # Red for TRACKING
+                        color = (0, 0, 255)
                     elif state.state.value == "STOPPED":
-                        color = (0, 255, 255)  # Yellow for STOPPED
+                        color = (0, 255, 255)
                     
-                    # Draw ball circle and crosshair
                     cv2.circle(frame, (cx, cy), radius, color, 2)
                     cv2.line(frame, (cx - 20, cy), (cx + 20, cy), color, 1)
                     cv2.line(frame, (cx, cy - 20), (cx, cy + 20), color, 1)
                     
-                    # Draw state
                     cv2.putText(frame, state.state.value, (10, 30), 
                                cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
                     
-                    # Show speed if tracking
                     if state.velocity and state.state.value == "TRACKING":
                         speed_ms = state.velocity.speed / sim.calibrator.pixels_per_meter
                         cv2.putText(frame, f"{speed_ms:.2f} m/s", (10, 70),
                                    cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
                 
-                # Encode as JPEG - lower quality for faster encoding/transfer
-                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 35])
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
     
     return StreamingResponse(
         generate_frames(),
-        media_type='multipart/x-mixed-replace; boundary=frame'
+        media_type='multipart/x-mixed-replace; boundary=frame',
+        headers={
+            'Cache-Control': 'no-store, no-cache, must-revalidate',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive',
+        }
     )
+
+
+@app.get("/api/video/zed")
+async def zed_video_feed():
+    """MJPEG video stream from the ZED 2i left camera."""
+    def generate_frames():
+        sim = get_app_instance()
+        last_t = 0.0
+        last_frame_ref = None
+        TARGET_FPS = 10
+        while sim._running:
+            now = time.time()
+            dt = now - last_t
+            if dt < 1 / TARGET_FPS:
+                time.sleep(max(0.001, 1 / TARGET_FPS - dt))
+                continue
+            last_t = now
+            ref = sim._zed_frame
+            if ref is not None and ref is not last_frame_ref:
+                last_frame_ref = ref
+                frame = ref.copy()
+                _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 35])
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            elif ref is None:
+                time.sleep(0.1)
+
+    return StreamingResponse(
+        generate_frames(),
+        media_type='multipart/x-mixed-replace; boundary=frame',
+        headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', 'Connection': 'keep-alive'},
+    )
+
+
+@app.get("/api/video/realsense")
+async def realsense_video_feed():
+    """MJPEG video stream from the RealSense D455 color camera."""
+    def generate_frames():
+        sim = get_app_instance()
+        last_t = 0.0
+        last_frame_ref = None
+        TARGET_FPS = 10
+        while sim._running:
+            now = time.time()
+            dt = now - last_t
+            if dt < 1 / TARGET_FPS:
+                time.sleep(max(0.001, 1 / TARGET_FPS - dt))
+                continue
+            last_t = now
+            ref = sim._rs_frame
+            if ref is not None and ref is not last_frame_ref:
+                last_frame_ref = ref
+                frame = ref.copy()
+                _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 35])
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            elif ref is None:
+                time.sleep(0.1)
+
+    return StreamingResponse(
+        generate_frames(),
+        media_type='multipart/x-mixed-replace; boundary=frame',
+        headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', 'Connection': 'keep-alive'},
+    )
+
+
+@app.get("/api/cameras/status")
+async def get_cameras_status():
+    """Get status of all cameras."""
+    try:
+        sim = get_app_instance()
+        statuses = {}
+        for ct in (CameraType.ZED, CameraType.REALSENSE):
+            src = sim.camera_manager.get_source(ct)
+            if src:
+                statuses[ct.value] = src.status().to_dict()
+        statuses["arducam"] = {
+            "type": "arducam",
+            "connected": sim.camera is not None and sim.camera.is_running,
+            "running": sim._running,
+            "fps": round(sim.camera.fps, 1) if sim.camera else 0,
+            "resolution": list(sim.camera.resolution) if sim.camera else [0, 0],
+        }
+        return JSONResponse({"cameras": statuses})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/v1/shot/latest")
+async def get_latest_shot_report():
+    """Get the latest full shot report with all TrackMan-style metrics."""
+    try:
+        sim = get_app_instance()
+        if sim._latest_shot_report:
+            return JSONResponse(sim._latest_shot_report.to_dict())
+        return JSONResponse({"error": "No shot recorded yet"}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/api/status")
@@ -742,6 +1678,58 @@ async def get_status():
         })
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/health")
+async def health_check():
+    """
+    Readiness probe used by the top-level launcher to gate frontend startup.
+    Returns structured readiness with camera health so the launcher can
+    distinguish server_up / camera_ready / degraded states.
+    """
+    try:
+        sim = get_app_instance()
+    except RuntimeError:
+        return JSONResponse({
+            "status": "starting",
+            "server_up": True,
+            "camera_ready": False,
+            "startup_phase": "init",
+            "arducam": None,
+            "degraded_reasons": ["app_not_initialized"],
+        })
+
+    camera_ready = sim.camera is not None and sim._running
+    arducam_fps = PuttingSimApp._fps_snapshot(sim._cap_fps)
+    degraded_reasons: list[str] = []
+    if sim._startup_fail_reason:
+        degraded_reasons.append(sim._startup_fail_reason)
+    if camera_ready and arducam_fps > 0 and arducam_fps < 20:
+        degraded_reasons.append(f"arducam_low_fps:{arducam_fps:.1f}")
+
+    phase = sim._startup_phase
+    if phase == "running" and camera_ready:
+        status = "degraded" if degraded_reasons else "ready"
+    elif phase == "error":
+        status = "error"
+    else:
+        status = "starting"
+
+    resolution = list(sim.camera.resolution) if sim.camera else [0, 0]
+    return JSONResponse({
+        "status": status,
+        "server_up": True,
+        "camera_ready": camera_ready,
+        "startup_phase": phase,
+        "arducam": {
+            "connected": sim.camera is not None,
+            "resolution": resolution,
+            "fps": round(arducam_fps, 1),
+            "sustained_startup_fps": round(sim._startup_sustained_fps, 1),
+            "profile": sim._startup_arducam_profile_info,
+        },
+        "degraded_reasons": degraded_reasons,
+    })
 
 
 @app.get("/api/config")
@@ -819,10 +1807,10 @@ async def calibrate_rectangle(data: dict):
 
 @app.post("/api/tracker/reset")
 async def reset_tracker():
-    """Reset tracker state."""
+    """Reset tracker state, shot report, game analysis, and fusion caches."""
     try:
         sim = get_app_instance()
-        sim.tracker.reset()
+        sim.reset_all()
         return JSONResponse({"success": True})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -2536,30 +3524,27 @@ async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time state updates."""
     await websocket.accept()
     
+    sim = get_app_instance()
+    await sim.add_client(websocket)
+    
     try:
-        sim = get_app_instance()
-        await sim.add_client(websocket)
-        
-        # Keep connection alive
         while True:
             try:
-                # Wait for any message (keepalive)
-                data = await asyncio.wait_for(websocket.receive_text(), timeout=30)
-                
-                # Handle commands
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=60)
                 try:
                     cmd = json.loads(data)
                     if cmd.get("type") == "reset":
-                        sim.tracker.reset()
+                        sim.reset_all()
                     elif cmd.get("type") == "ping":
                         await websocket.send_text(json.dumps({"type": "pong"}))
                 except json.JSONDecodeError:
                     pass
-                    
             except asyncio.TimeoutError:
-                # Send ping to check connection
-                await websocket.send_text(json.dumps({"type": "ping"}))
-                
+                # Client hasn't sent anything in 60s, send a ping to verify connection
+                try:
+                    await websocket.send_text(json.dumps({"type": "ping"}))
+                except Exception:
+                    break
     except WebSocketDisconnect:
         pass
     except Exception as e:
@@ -2567,7 +3552,7 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         try:
             await sim.remove_client(websocket)
-        except:
+        except Exception:
             pass
 
 

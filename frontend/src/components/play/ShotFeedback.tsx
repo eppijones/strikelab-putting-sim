@@ -68,7 +68,7 @@ export const ShotFeedback: React.FC = () => {
   const [feedback, setFeedback] = useState<FeedbackDisplay | null>(null);
   const [showFeedback, setShowFeedback] = useState(false);
   const lastResultRef = useRef<string | null>(null);
-  const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     // Show feedback when shot stops and we have a result
@@ -95,9 +95,10 @@ export const ShotFeedback: React.FC = () => {
       }
     }
     
-    // Clear feedback when returning to ARMED or READY
+    // Clear feedback and dedup key when returning to ARMED so repeated identical putts still show
     if (gameState === 'ARMED') {
       setShowFeedback(false);
+      lastResultRef.current = null;
       if (hideTimeoutRef.current) {
         clearTimeout(hideTimeoutRef.current);
       }

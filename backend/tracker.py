@@ -80,18 +80,39 @@ class BackgroundModel:
     def get_foreground_delta(self, frame: np.ndarray) -> Tuple[np.ndarray, float]:
         """
         Compute foreground delta (difference from background).
+        Caches the delta array so get_roi_delta can reuse it.
         
         Returns:
             (delta_image, mean_delta) - delta image and mean absolute difference
         """
         if self._background is None:
+            self._cached_delta = None
             return np.zeros_like(frame[:, :, 0]), 0.0
         
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
-        delta = np.abs(gray - self._background)
+        self._cached_delta = np.abs(gray - self._background)
         
-        return delta.astype(np.uint8), float(np.mean(delta))
+        return self._cached_delta.astype(np.uint8), float(np.mean(self._cached_delta))
     
+    def get_roi_delta(self, center: Tuple[int, int], radius: int = 100) -> float:
+        """
+        Compute mean foreground delta in a rectangular ROI around *center*.
+        Must be called AFTER get_foreground_delta on the same frame.
+        """
+        delta = getattr(self, '_cached_delta', None)
+        if delta is None:
+            return 0.0
+        h, w = delta.shape
+        cx, cy = int(center[0]), int(center[1])
+        x1 = max(0, cx - radius)
+        x2 = min(w, cx + radius)
+        y1 = max(0, cy - radius)
+        y2 = min(h, cy + radius)
+        roi = delta[y1:y2, x1:x2]
+        if roi.size == 0:
+            return 0.0
+        return float(np.mean(roi))
+
     def get_motion_mask(self, frame: np.ndarray, threshold: float = 25.0) -> np.ndarray:
         """Get binary mask of motion regions."""
         delta, _ = self.get_foreground_delta(frame)
@@ -186,6 +207,9 @@ class ShotResult:
     exited_frame: bool = False         # Whether ball exited the camera view
     # Frozen calibration value used for this shot (for consistent distance reporting)
     pixels_per_meter: float = 1150.0
+    # True when the fast-putt fallback heuristic was used instead of depth-camera measurement
+    fast_putt_estimated: bool = False
+    shot_confidence: float = 0.0
     
 
 @dataclass
@@ -202,6 +226,7 @@ class TrackerState:
     idle_stddev: float = 0.0  # Position jitter when idle
     virtual_ball: Optional[VirtualBallState] = None  # Virtual ball when rolling off-frame
     exit_state: Optional[ExitState] = None  # State when ball exited frame
+    ready_status: str = "no_ball"  # "no_ball", "settling", "ready", "tracking", "rolling", "stopped"
 
 
 @dataclass 
@@ -282,9 +307,10 @@ class BallTracker:
     STOPPED_VELOCITY_THRESHOLD = 50  # px/s to consider stopped
     STOPPED_CONFIRM_FRAMES = 10     # Frames at low velocity to confirm stop
     COOLDOWN_DURATION_MS = 500      # Cooldown before re-arming
+    STOPPED_HOLD_MS = 4000          # Hold in STOPPED state so user can see results
     
     # Settling period - ignore motion detection while ball stabilizes
-    SETTLING_FRAMES = 60            # ~0.5 seconds at 120fps to let ball settle after placement
+    SETTLING_FRAMES = 15            # ~125ms at 120fps - just enough for detection to stabilize
     
     # IDLE lane parameters - tuned for butter-smooth idle
     IDLE_EMA_ALPHA = 0.01           # Very strong smoothing when idle (lower = smoother)
@@ -305,14 +331,14 @@ class BallTracker:
     # False shot prevention
     MAX_RADIUS_CHANGE_RATIO = 0.5   # Reject if radius changes > 50%
     MIN_CONFIDENCE_THRESHOLD = 0.7  # Minimum detection confidence
-    MAX_POSITION_JUMP_PX = 100      # Large jump = ball placement, not shot
+    MAX_POSITION_JUMP_PX = 300      # Large jump = ball placement, not shot (high to avoid repeated triggers)
     MIN_SHOT_FRAMES = 5             # Minimum frames for valid shot
-    MIN_SHOT_DISTANCE_PX = 50       # Minimum physical distance for valid shot (rejects false triggers)
+    MIN_SHOT_DISTANCE_PX = 30       # Minimum physical distance (px) - lowered so short putts register
     
     # Frame exit detection - for virtual ball continuation
     FRAME_EXIT_MARGIN_PX = 30       # Ball considered "exited" when this close to edge
     MIN_EXIT_SPEED_PX_S = 100       # Minimum speed to trigger virtual rolling
-    MIN_TRACKING_FRAMES_FOR_EXIT = 10  # Need enough data for curve estimation
+    MIN_TRACKING_FRAMES_FOR_EXIT = 3   # Min frames before exit (3 = absolute minimum for velocity)
     
     # Motion direction filter - prevents false triggers from putter swing/hand movement
     VALID_MOTION_ANGLE_DEG = 45.0   # Accept motion within +/- this angle from forward
@@ -410,6 +436,7 @@ class BallTracker:
         self._motion_trigger_count = 0
         self._stopped_count = 0
         self._cooldown_start_ns: int = 0
+        self._stopped_at_ns: int = 0
         self._settling_countdown: int = 0  # Frames to wait before motion detection
         
         # Ball validation for trigger
@@ -420,6 +447,7 @@ class BallTracker:
         self._background = BackgroundModel(learning_rate=self.BG_LEARNING_RATE)
         self._last_frame: Optional[np.ndarray] = None
         self._foreground_delta: float = 0.0
+        self._ball_roi_delta: float = 0.0
         
         # Idle stability tracking  
         self._idle_positions: deque[Tuple[float, float]] = deque(maxlen=600)  # ~5s at 120fps
@@ -460,6 +488,8 @@ class BallTracker:
         
         # Shot timing stats
         self._shot_timing_stats: Optional[FrameTimingStats] = None
+        self._tracking_start_timestamp_ns: int = 0
+        self._physical_distance_at_exit_px: float = 0.0
         
         # State timeline for debugging
         self._state_timeline: List[StateTimelineEntry] = []
@@ -472,6 +502,10 @@ class BallTracker:
         
         # LOST_TRACK state tracking
         self._lost_track_count: int = 0
+        
+        # External speed override for fast putt resolution (from multi-camera fusion)
+        self._fast_putt_speed_callback = None
+        self._fast_putt_estimated = False  # True when heuristic fallback used for speed
         
     def update(
         self, 
@@ -521,9 +555,16 @@ class BallTracker:
                     )
                 self._background.update(frame, mask)
             
-            # Compute foreground delta for motion detection
+            # Compute foreground delta for motion detection (single grayscale conversion)
             if self._background.is_initialized:
                 _, self._foreground_delta = self._background.get_foreground_delta(frame)
+                if self._current_pos is not None:
+                    self._ball_roi_delta = self._background.get_roi_delta(
+                        center=(int(self._current_pos[0]), int(self._current_pos[1])),
+                        radius=int((self._last_radius or 20) * 4),
+                    )
+                else:
+                    self._ball_roi_delta = 0.0
         
         # Handle VIRTUAL_ROLLING state - update virtual ball physics
         if self._state == ShotState.VIRTUAL_ROLLING:
@@ -541,6 +582,75 @@ class BallTracker:
                 return self._build_state()
         
         if detection is None:
+            # FAST PUTT DETECTION: ball was settled (ARMED with known position) and suddenly vanished.
+            # Two trigger paths:
+            #   A) Delta-confirmed (2 frames): ROI/frame delta proves something changed near ball
+            #   B) Prolonged loss (5 frames): ball is simply gone -- covers very fast putts
+            #      where the putter passes through too quickly for delta to spike
+            if (self._state == ShotState.ARMED and 
+                self._current_pos is not None and
+                self._settling_countdown <= 0):
+                
+                if not hasattr(self, '_armed_lost_count'):
+                    self._armed_lost_count = 0
+                self._armed_lost_count += 1
+                
+                roi_d = getattr(self, '_ball_roi_delta', 0.0)
+                delta_confirmed = (roi_d > self.BG_DELTA_THRESHOLD or
+                                   self._foreground_delta > self.BG_DELTA_THRESHOLD)
+                
+                fast_trigger = (self._armed_lost_count >= 2 and delta_confirmed)
+                vanish_trigger = (self._armed_lost_count >= 5)
+                
+                if fast_trigger or vanish_trigger:
+                    last_pos = self._current_pos
+                    trigger_reason = "delta_spike" if fast_trigger else "prolonged_loss"
+                    logger.info(f"FAST PUTT DETECTED ({trigger_reason}): ball vanished from ARMED state "
+                               f"(lost {self._armed_lost_count} frames, roi_delta={roi_d:.1f}, fg_delta={self._foreground_delta:.1f})")
+                    self._motion_start_pos = last_pos
+                    self._transition_to_tracking(frame_id, timestamp_ns)
+                    
+                    # Higher default for vanish-triggered (ball was very fast)
+                    est_speed = 1500.0 if fast_trigger else 3500.0
+                    dir_rad = np.radians(self._forward_direction_deg)
+                    est_vx = est_speed * np.cos(dir_rad)
+                    est_vy = est_speed * np.sin(dir_rad)
+                    self._fast_putt_estimated = True
+                    
+                    if self._fast_putt_speed_callback:
+                        try:
+                            resolved = self._fast_putt_speed_callback(timestamp_ns)
+                            if resolved is not None:
+                                est_vx = resolved[0]
+                                est_vy = resolved[1]
+                                est_speed = np.sqrt(est_vx**2 + est_vy**2)
+                                self._fast_putt_estimated = False
+                                logger.info(f"  Fast putt speed resolved from depth cameras: {est_speed:.0f} px/s")
+                        except Exception as e:
+                            logger.debug(f"  Fast putt callback failed, using estimate: {e}")
+                    self._velocity = Velocity(vx=est_vx, vy=est_vy)
+                    self._last_valid_velocity = self._velocity
+                    self._impact_velocity = self._velocity
+                    self._first_speed_frame = frame_id
+                    self._last_valid_position = last_pos
+                    self._frames_lost = self._armed_lost_count
+                    
+                    self._raw_trajectory.append(TrackPoint(
+                        x=last_pos[0], y=last_pos[1],
+                        timestamp_ns=timestamp_ns - int(self._armed_lost_count * 1e9 / max(self._effective_fps, 10)),
+                        frame_id=frame_id - self._armed_lost_count,
+                        confidence=1.0
+                    ))
+                    
+                    logger.info(f"  Estimated velocity: {est_speed:.0f} px/s @ {self._forward_direction_deg:.1f}°")
+                    logger.info(f"  Triggering frame exit check...")
+                    
+                    self._transition_to_virtual_rolling(timestamp_ns, frame_id)
+                    return self._build_state()
+            else:
+                if hasattr(self, '_armed_lost_count'):
+                    self._armed_lost_count = 0
+            
             return self._build_state()
         
         # Validate detection
@@ -647,16 +757,18 @@ class BallTracker:
             )
             
             if dist > self.MAX_POSITION_JUMP_PX:
-                # Ball was placed - reset to new position and start settling period
-                logger.info(f"Ball placement detected (jump={dist:.1f}px), settling for {self.SETTLING_FRAMES} frames")
+                # Ball was placed at a new location - reset position and settle briefly
+                # Only start settling if NOT already settling (avoid infinite settle loop)
+                if self._settling_countdown <= 0:
+                    logger.info(f"Ball placement detected (jump={dist:.1f}px), settling for {self.SETTLING_FRAMES} frames")
+                    self._settling_countdown = self.SETTLING_FRAMES
+                    self._background.reset()
+                    self._ball_stable_count = 0
                 self._smoothed_pos = new_pos
                 self._locked_pos = new_pos
                 self._current_pos = new_pos
                 self._idle_positions.clear()
                 self._idle_stability_count = 0
-                self._settling_countdown = self.SETTLING_FRAMES  # Start settling period
-                self._background.reset()  # Reset background for new ball position
-                self._ball_stable_count = 0  # Reset ball validation
                 return
             
             # EMA smoothing
@@ -690,6 +802,9 @@ class BallTracker:
                 self._locked_pos = self._smoothed_pos
                 self._current_pos = self._smoothed_pos
         
+        # Pre-validate ball signature while idle so motion trigger fires instantly on impact
+        self._validate_ball_signature(detection)
+        
         # Track idle positions for jitter measurement
         self._idle_positions.append((detection.cx, detection.cy))  # Raw positions for stddev
         
@@ -712,23 +827,21 @@ class BallTracker:
         - ROI updated for efficient tracking
         """
         new_pos = (detection.cx, detection.cy)
+        frames_since_start = frame_id - self._motion_start_frame
         
-        # Check for suspicious position jump during tracking (might be noise after ball exits)
-        if self._current_pos and self._velocity:
+        # Suspicious position jump check — only AFTER the initial burst (first 10 frames).
+        # During the initial burst the ball can move very fast and velocity isn't stable yet,
+        # so rejecting frames there causes the tracker to get stuck.
+        if self._current_pos and self._velocity and frames_since_start > self.MOTION_RAW_FRAMES:
             dx = new_pos[0] - self._current_pos[0]
             dy = new_pos[1] - self._current_pos[1]
             jump_dist = np.sqrt(dx**2 + dy**2)
             
-            # Expected movement based on velocity and ACTUAL frame time
             expected_dt = self._get_expected_frame_dt()
             expected_move = self._velocity.speed * expected_dt
             
-            # If jump is way larger than expected, this might be noise
-            if jump_dist > expected_move * 5 and jump_dist > 50:
-                logger.warning(f"Suspicious position jump during tracking: {jump_dist:.1f}px "
-                             f"(expected ~{expected_move:.1f}px). Treating as lost frame.")
+            if jump_dist > expected_move * 5 and jump_dist > 100:
                 self._frames_lost += 1
-                # Don't update position with this suspicious detection
                 return
         
         # For first N frames after impact, use raw position (critical for speed accuracy)
@@ -1338,7 +1451,13 @@ class BallTracker:
             d_total_exit = physical_distance_px + virtual_from_exit
             
             # Compute exit confidence based on measurement quality
-            if exit_r_squared > 0.95:
+            if self._fast_putt_estimated and self._impact_velocity and self._impact_velocity.speed > self.MIN_EXIT_SPEED_PX_S:
+                # Fast putt: impact velocity is the only measurement (ball vanished in 1-2 frames).
+                # R² is meaningless with <=2 points; trust the resolved/estimated speed directly.
+                effective_exit_speed = self._impact_velocity.speed
+                exit_confidence = 0.65
+                details["fast_putt_override"] = True
+            elif exit_r_squared > 0.95:
                 exit_confidence = 0.90
             elif exit_r_squared > 0.8:
                 exit_confidence = 0.85
@@ -1350,11 +1469,15 @@ class BallTracker:
                 exit_confidence = 0.3
             
             # Reduce confidence if energy consistency failed (even after correction)
-            if energy_consistency_failed:
+            if energy_consistency_failed and not self._fast_putt_estimated:
                 exit_confidence *= 0.85
-            # Reduce confidence for fast exits with few points
-            elif is_fast_exit and has_few_points:
+            # Reduce confidence for fast exits with few points (but not for fast putts)
+            elif is_fast_exit and has_few_points and not self._fast_putt_estimated:
                 exit_confidence *= 0.9
+            
+            # Recompute d_total_exit with potentially updated effective_exit_speed
+            virtual_from_exit = (effective_exit_speed ** 2) / (2 * a)
+            d_total_exit = physical_distance_px + virtual_from_exit
             
             details["d_total_exit_px"] = d_total_exit
             details["d_total_exit_cm"] = (d_total_exit / ppm) * 100
@@ -1720,13 +1843,15 @@ class BallTracker:
     def _check_transitions(self, detection: Detection, timestamp_ns: int, frame_id: int):
         """Check for state machine transitions."""
         if self._state == ShotState.ARMED:
-            self._check_armed_to_tracking(detection, frame_id)
+            self._check_armed_to_tracking(detection, frame_id, timestamp_ns)
         elif self._state == ShotState.TRACKING:
             self._check_tracking_to_stopped(frame_id, timestamp_ns)
         elif self._state == ShotState.STOPPED:
-            self._transition_to_cooldown(timestamp_ns)
+            elapsed_ms = (time.monotonic_ns() - self._stopped_at_ns) / 1e6
+            if elapsed_ms >= self.STOPPED_HOLD_MS:
+                self._transition_to_cooldown(timestamp_ns)
     
-    def _check_armed_to_tracking(self, detection: Detection, frame_id: int):
+    def _check_armed_to_tracking(self, detection: Detection, frame_id: int, timestamp_ns: int = 0):
         """
         Check if motion threshold exceeded to start tracking.
         
@@ -1760,20 +1885,13 @@ class BallTracker:
         motion_detected = displacement > self.MOTION_THRESHOLD_PX
         
         if motion_detected:
-            # Validate ball signature first (must look like a ball, not putter)
-            if not self._validate_ball_signature(detection):
-                logger.debug(f"Motion detected but ball signature invalid - waiting for stable ball")
-                return
-            
             # Check motion direction against valid putting direction
             motion_direction = np.degrees(np.arctan2(dy, dx))
             
-            # Calculate angle difference from forward direction
             angle_diff = abs(motion_direction - self._forward_direction_deg)
             if angle_diff > 180:
                 angle_diff = 360 - angle_diff
             
-            # Reject motion that's not within valid angle of forward direction
             if angle_diff > self._valid_motion_angle_deg:
                 logger.debug(
                     f"Motion rejected: direction {motion_direction:.1f}° not within "
@@ -1787,31 +1905,24 @@ class BallTracker:
             
             self._motion_trigger_count += 1
             
-            # Track accumulated motion to distinguish real motion from jitter
             if not hasattr(self, '_motion_start_pos'):
                 self._motion_start_pos = ref_pos
             
-            # Check if motion is sustained (ball actually moved in a direction)
-            accumulated_dist = np.sqrt(
-                (new_pos[0] - self._motion_start_pos[0])**2 +
-                (new_pos[1] - self._motion_start_pos[1])**2
-            )
-            
             logger.debug(
                 f"Motion trigger {self._motion_trigger_count}/{self.MOTION_CONFIRM_FRAMES}: "
-                f"displacement={displacement:.1f}px, accumulated={accumulated_dist:.1f}px, "
-                f"direction={motion_direction:.1f}° (valid)"
+                f"displacement={displacement:.1f}px, direction={motion_direction:.1f}° (valid)"
             )
             
-            # Require both consecutive triggers AND accumulated distance
-            if self._motion_trigger_count >= self.MOTION_CONFIRM_FRAMES and accumulated_dist > self.MOTION_THRESHOLD_PX * 1.5:
-                self._transition_to_tracking(frame_id)
+            # Ball was pre-validated during idle; direction filter prevents false triggers.
+            # Trigger as soon as we have enough consecutive frames.
+            if self._motion_trigger_count >= self.MOTION_CONFIRM_FRAMES:
+                self._transition_to_tracking(frame_id, timestamp_ns)
         else:
             self._motion_trigger_count = 0
             if hasattr(self, '_motion_start_pos'):
                 del self._motion_start_pos
     
-    def _transition_to_tracking(self, frame_id: int):
+    def _transition_to_tracking(self, frame_id: int, timestamp_ns: int):
         """Transition from ARMED to TRACKING."""
         logger.info(f"ARMED -> TRACKING at frame {frame_id}")
         
@@ -1829,6 +1940,7 @@ class BallTracker:
         self._state = ShotState.TRACKING
         self._lane = TrackerLane.MOTION
         self._motion_start_frame = frame_id
+        self._tracking_start_timestamp_ns = timestamp_ns
         self._first_speed_frame = 0
         self._shot_result = None
         self._motion_trigger_count = 0
@@ -1846,7 +1958,7 @@ class BallTracker:
             self._trajectory.append(TrackPoint(
                 x=self._shot_start_pos[0],
                 y=self._shot_start_pos[1],
-                timestamp_ns=0,  # Will be updated on next frame
+                timestamp_ns=timestamp_ns,
                 frame_id=frame_id,
                 confidence=1.0
             ))
@@ -1862,14 +1974,22 @@ class BallTracker:
         # Reset ball validation
         self._ball_stable_count = 0
     
+    # Maximum time in TRACKING before force-aborting (prevents stuck state)
+    MAX_TRACKING_DURATION_MS = 5000  # 5 seconds
+
     def _check_tracking_to_stopped(self, frame_id: int, timestamp_ns: int):
         """Check if ball has stopped moving using timestamp-based detection."""
+        # Safety: abort TRACKING if stuck too long (e.g., false trigger on foot/club)
+        if len(self._shot_timestamps) >= 2:
+            tracking_duration_ms = (timestamp_ns - self._shot_timestamps[0]) / 1e6
+            if tracking_duration_ms > self.MAX_TRACKING_DURATION_MS:
+                logger.warning(f"TRACKING timeout after {tracking_duration_ms:.0f}ms — aborting to ARMED")
+                self._transition_to_armed()
+                return
+
         # Don't transition to STOPPED if we recently lost detection but had high velocity
-        # This indicates ball might have exited frame, not stopped
         if self._frames_lost > 0 and self._last_valid_velocity:
             if self._last_valid_velocity.speed > self.MIN_EXIT_SPEED_PX_S:
-                # Ball was moving fast when we lost it - don't call it "stopped"
-                # Frame exit detection should handle this
                 logger.debug(f"Ignoring stop check: frames_lost={self._frames_lost}, "
                            f"last_speed={self._last_valid_velocity.speed:.1f}")
                 return
@@ -1905,12 +2025,27 @@ class BallTracker:
             physical_dist = np.sqrt((end.x - start.x)**2 + (end.y - start.y)**2)
             
             if physical_dist < self.MIN_SHOT_DISTANCE_PX:
-                # Too short - likely a false trigger (putter swing, hand movement)
-                logger.warning(f"Shot rejected: physical distance {physical_dist:.1f}px < minimum {self.MIN_SHOT_DISTANCE_PX}px (likely false trigger)")
-                self._transition_to_armed()
-                return
+                shot_points = len(self._raw_trajectory)
+                has_meaningful_speed = bool(
+                    self._impact_velocity and self._impact_velocity.speed >= (self.STOPPED_VELOCITY_THRESHOLD * 1.2)
+                )
+                # Allow short real putts if kinematics are coherent.
+                if not (shot_points >= 3 and has_meaningful_speed):
+                    logger.warning(
+                        "Shot rejected: short low-confidence trigger "
+                        f"(distance={physical_dist:.1f}px, points={shot_points}, "
+                        f"impact_speed={self._impact_velocity.speed if self._impact_velocity else 0.0:.1f}px/s)"
+                    )
+                    self._transition_to_armed()
+                    return
+                logger.info(
+                    "Short putt accepted by confidence gate "
+                    f"(distance={physical_dist:.1f}px, points={shot_points}, "
+                    f"impact_speed={self._impact_velocity.speed if self._impact_velocity else 0.0:.1f}px/s)"
+                )
         
         self._state = ShotState.STOPPED
+        self._stopped_at_ns = time.monotonic_ns()
         
         # Compute shot timing stats
         self._compute_shot_timing_stats()
@@ -1968,6 +2103,15 @@ class BallTracker:
                     initial_speed = v.speed
                     initial_direction = v.direction_deg
                     break
+        if initial_speed <= 0.0 and len(self._raw_trajectory) >= 2:
+            p1 = self._raw_trajectory[0]
+            p2 = self._raw_trajectory[min(2, len(self._raw_trajectory) - 1)]
+            dt_s = self._get_dt_from_timestamps(p1.timestamp_ns, p2.timestamp_ns)
+            if dt_s > 0:
+                vx = (p2.x - p1.x) / dt_s
+                vy = (p2.y - p1.y) / dt_s
+                initial_speed = float(np.sqrt(vx * vx + vy * vy))
+                initial_direction = float(np.degrees(np.arctan2(vy, vx)))
         
         # Compute timing metrics
         frames_to_tracking = self.MOTION_CONFIRM_FRAMES
@@ -1985,12 +2129,8 @@ class BallTracker:
         if self._virtual_ball:
             duration_ms += self._virtual_ball.time_since_exit * 1000
         
-        # Physical distance (trajectory in frame) - FROZEN at computation time
-        physical_distance_px = 0.0
-        if trajectory_points:
-            start_pos = trajectory_points[0]
-            end_pos = trajectory_points[-1]
-            physical_distance_px = np.sqrt((end_pos[0] - start_pos[0])**2 + (end_pos[1] - start_pos[1])**2)
+        # Physical distance (cumulative path along tracked points) - FROZEN at computation time
+        physical_distance_px = self._cumulative_path_distance(trajectory_points) if trajectory_points else 0.0
         
         # Virtual distance (after frame exit) - FROZEN at computation time
         virtual_distance_px = 0.0
@@ -2001,6 +2141,7 @@ class BallTracker:
         
         # Total distance - FROZEN at computation time
         total_distance_px = physical_distance_px + virtual_distance_px
+        shot_confidence = self._estimate_shot_confidence(physical_distance_px, initial_speed)
         
         # Freeze the calibration value used for this shot
         frozen_ppm = self._current_pixels_per_meter
@@ -2021,11 +2162,33 @@ class BallTracker:
             virtual_distance_px=virtual_distance_px,
             total_distance_px=total_distance_px,
             exited_frame=exited_frame,
-            pixels_per_meter=frozen_ppm
+            pixels_per_meter=frozen_ppm,
+            fast_putt_estimated=self._fast_putt_estimated,
+            shot_confidence=shot_confidence,
         )
         
-        logger.info(f"Shot result: speed={initial_speed:.1f}px/s, dir={initial_direction:.1f}°, "
-                   f"total_distance={total_distance_px:.1f}px, exited_frame={exited_frame}")
+        logger.info(
+            f"Shot result: speed={initial_speed:.1f}px/s, dir={initial_direction:.1f}°, "
+            f"total_distance={total_distance_px:.1f}px, exited_frame={exited_frame}, "
+            f"confidence={shot_confidence:.2f}"
+        )
+
+    def _estimate_shot_confidence(self, physical_distance_px: float, initial_speed_px_s: float) -> float:
+        """Confidence heuristic for shot validity (0..1)."""
+        score = 0.0
+        if physical_distance_px >= self.MIN_SHOT_DISTANCE_PX:
+            score += 0.35
+        elif physical_distance_px >= self.MIN_SHOT_DISTANCE_PX * 0.6:
+            score += 0.2
+        if initial_speed_px_s >= self.STOPPED_VELOCITY_THRESHOLD * 1.2:
+            score += 0.25
+        if len(self._raw_trajectory) >= 4:
+            score += 0.25
+        elif len(self._raw_trajectory) >= 3:
+            score += 0.15
+        if self._shot_timing_stats and self._shot_timing_stats.effective_fps >= 20.0:
+            score += 0.15
+        return float(max(0.0, min(1.0, score)))
     
     def _transition_to_cooldown(self, timestamp_ns: int):
         """Transition from STOPPED to COOLDOWN."""
@@ -2051,9 +2214,12 @@ class BallTracker:
         self._motion_trigger_count = 0
         self._stopped_count = 0
         self._idle_positions.clear()
-        self._locked_pos = self._current_pos  # Lock at current position
+        # Reset position tracking so next detection is a fresh start (no false "jump")
+        self._current_pos = None
+        self._smoothed_pos = None
+        self._locked_pos = None
         self._idle_stability_count = 0
-        self._settling_countdown = self.SETTLING_FRAMES // 2  # Brief settling after shot
+        self._settling_countdown = 0  # No settling needed - let next detection establish position
         self._roi = None
         self._background.reset()  # Reset background for new baseline
         
@@ -2075,13 +2241,27 @@ class BallTracker:
         # Clear shot timing
         self._shot_timestamps = []
         self._shot_timing_stats = None
+        self._tracking_start_timestamp_ns = 0
+        self._physical_distance_at_exit_px = 0.0
         
         # Clear new determinism-related state
         self._state_timeline = []
         self._robust_v0 = None
         self._low_velocity_start_ns = None
         self._lost_track_count = 0
+        self._armed_lost_count = 0
+        self._fast_putt_estimated = False
     
+    @staticmethod
+    def _cumulative_path_distance(points) -> float:
+        """Sum of segment lengths along an ordered list of (x, y) tuples."""
+        dist = 0.0
+        for i in range(1, len(points)):
+            dx = points[i][0] - points[i - 1][0]
+            dy = points[i][1] - points[i - 1][1]
+            dist += np.sqrt(dx * dx + dy * dy)
+        return dist
+
     def _compute_idle_stddev(self) -> float:
         """Compute position standard deviation when idle."""
         if len(self._idle_positions) < 10:
@@ -2100,6 +2280,21 @@ class BallTracker:
             ball_x = self._current_pos[0] if self._current_pos else None
             ball_y = self._current_pos[1] if self._current_pos else None
         
+        # Compute ready status for UI — simple: place_ball / ready / tracking / stopped
+        if self._state in (ShotState.TRACKING, ShotState.VIRTUAL_ROLLING):
+            ready = "tracking"
+        elif self._state == ShotState.STOPPED:
+            ready = "stopped"
+        elif self._state == ShotState.COOLDOWN:
+            ready = "ready"  # Will re-arm momentarily
+        elif self._state == ShotState.ARMED:
+            if ball_x is None or self._settling_countdown > 0:
+                ready = "place_ball"
+            else:
+                ready = "ready"
+        else:
+            ready = "place_ball"
+
         return TrackerState(
             state=self._state,
             lane=self._lane,
@@ -2111,7 +2306,8 @@ class BallTracker:
             shot_result=self._shot_result,
             idle_stddev=self._compute_idle_stddev(),
             virtual_ball=self._virtual_ball,
-            exit_state=self._exit_state
+            exit_state=self._exit_state,
+            ready_status=ready
         )
     
     def reset(self):
@@ -2132,6 +2328,7 @@ class BallTracker:
         self._background.reset()
         self._roi = None
         self._foreground_delta = 0.0
+        self._ball_roi_delta = 0.0
         self._motion_trigger_count = 0
         self._idle_stability_count = 0
         self._settling_countdown = self.SETTLING_FRAMES  # Start with settling period
@@ -2154,12 +2351,15 @@ class BallTracker:
         # Clear timing
         self._shot_timestamps = []
         self._shot_timing_stats = None
+        self._tracking_start_timestamp_ns = 0
+        self._physical_distance_at_exit_px = 0.0
         
         # Clear new determinism-related state
         self._state_timeline = []
         self._robust_v0 = None
         self._low_velocity_start_ns = None
         self._lost_track_count = 0
+        self._fast_putt_estimated = False
         
         logger.info("Tracker reset")
     
@@ -2169,6 +2369,17 @@ class BallTracker:
         Called by main loop when auto-calibration updates.
         """
         self._current_pixels_per_meter = pixels_per_meter
+    
+    def set_fast_putt_speed_callback(self, callback):
+        """
+        Set a callback to resolve actual ball speed for fast putts.
+        
+        The callback receives timestamp_ns and should return (vx_px_s, vy_px_s)
+        or None if no data is available. Used by the multi-camera sensor fusion
+        to replace the hardcoded speed estimate with measured data from
+        ZED 2i / RealSense depth cameras.
+        """
+        self._fast_putt_speed_callback = callback
     
     def get_deceleration_px_s2(self, speed_px_s: Optional[float] = None) -> float:
         """
@@ -2387,14 +2598,14 @@ class BallTracker:
         if should_exit:
             logger.info(f"Frame exit detected: {exit_reason}")
             
-            # Check minimum requirements for virtual rolling
-            if len(self._raw_trajectory) < self.MIN_TRACKING_FRAMES_FOR_EXIT:
-                logger.warning(f"Not enough tracking frames for virtual rolling: {len(self._raw_trajectory)} < {self.MIN_TRACKING_FRAMES_FOR_EXIT}")
-                return False
-            
             vel = self._last_valid_velocity or self._velocity
             if vel is None or vel.speed < self.MIN_EXIT_SPEED_PX_S:
                 logger.warning(f"Exit speed too low for virtual rolling: {vel.speed if vel else 0:.1f} px/s < {self.MIN_EXIT_SPEED_PX_S}")
+                return False
+            
+            n_frames = len(self._raw_trajectory)
+            if n_frames < self.MIN_TRACKING_FRAMES_FOR_EXIT:
+                logger.warning(f"Not enough tracking frames for virtual rolling: {n_frames} < {self.MIN_TRACKING_FRAMES_FOR_EXIT}")
                 return False
             
             logger.info(f"=== VIRTUAL ROLLING TRIGGERED ===")
@@ -2450,13 +2661,10 @@ class BallTracker:
         
         curvature = self._compute_trajectory_curvature()
         
-        # Calculate physical distance traveled so far
-        physical_distance_px = 0.0
-        if self._shot_start_pos and exit_pos:
-            physical_distance_px = np.sqrt(
-                (exit_pos[0] - self._shot_start_pos[0])**2 + 
-                (exit_pos[1] - self._shot_start_pos[1])**2
-            )
+        # Calculate physical distance traveled so far (cumulative path)
+        trajectory_points_xy = [(p.x, p.y) for p in self._raw_trajectory]
+        physical_distance_px = self._cumulative_path_distance(trajectory_points_xy)
+        self._physical_distance_at_exit_px = physical_distance_px
         
         # Try to fit physics model to trajectory
         fitted_v0, fitted_a, fitted_total_dist = self._fit_trajectory_physics()
@@ -2659,14 +2867,8 @@ class BallTracker:
         if self._virtual_ball:
             self._virtual_ball.is_rolling = False
             
-            # Calculate total distance including physical tracking
-            physical_distance = 0.0
-            if self._exit_state and self._exit_state.trajectory_before_exit:
-                traj = self._exit_state.trajectory_before_exit
-                if len(traj) >= 2:
-                    start = traj[0]
-                    end = traj[-1]
-                    physical_distance = np.sqrt((end[0] - start[0])**2 + (end[1] - start[1])**2)
+            # Use the same physical path metric used at exit estimation to avoid double counting.
+            physical_distance = self._physical_distance_at_exit_px
             
             virtual_distance = self._virtual_ball.distance_traveled
             total_distance = physical_distance + virtual_distance

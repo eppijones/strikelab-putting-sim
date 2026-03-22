@@ -3,8 +3,17 @@ import { Wifi, WifiOff, FlaskConical } from 'lucide-react';
 import { usePuttingState } from '../../contexts/WebSocketContext';
 import clsx from 'clsx';
 
+const READY_LABELS: Record<string, { text: string; cls: string }> = {
+  place_ball: { text: 'PLACE BALL',  cls: 'bg-slate-100 border-slate-200 text-slate-500' },
+  ready:      { text: 'READY',       cls: 'bg-green-100 border-green-200 text-green-700' },
+  tracking:   { text: 'TRACKING',    cls: 'bg-red-100 border-red-200 text-red-600 animate-pulse' },
+  stopped:    { text: 'STOPPED',     cls: 'bg-amber-100 border-amber-200 text-amber-700' },
+};
+
 export const ConnectionStatus: React.FC = () => {
-  const { isConnected, isTestShotActive, triggerTestShot } = usePuttingState();
+  const { isConnected, isTestShotActive, triggerTestShot, readyStatus } = usePuttingState();
+
+  const ready = READY_LABELS[readyStatus] || READY_LABELS.place_ball;
 
   return (
     <div className="fixed top-4 left-4 z-50 flex items-center gap-2">
@@ -17,6 +26,15 @@ export const ConnectionStatus: React.FC = () => {
       )}>
         {isConnected ? <Wifi size={14} /> : <WifiOff size={14} />}
         <span>{isConnected ? 'CONNECTED' : 'DISCONNECTED'}</span>
+      </div>
+
+      {/* Ready Status */}
+      <div className={clsx(
+        "px-3 py-1.5 rounded-full text-xs font-semibold border backdrop-blur-md transition-all duration-300 shadow-sm",
+        ready.cls
+      )}>
+        {readyStatus === 'ready' && <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 mr-1.5 animate-pulse" />}
+        {ready.text}
       </div>
 
       {/* Test Shot Button */}

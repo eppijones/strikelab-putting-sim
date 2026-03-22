@@ -3,14 +3,14 @@
     "width": 1280,
     "height": 800,
     "fps": 120,
-    "device_id": 0,
+    "device_id": 1,
     "exposure": -6,
     "auto_exposure": false
   },
   "detector": {
     "white_lower_h": 0,
     "white_lower_s": 0,
-    "white_lower_v": 200,
+    "white_lower_v": 150,
     "white_upper_h": 180,
     "white_upper_s": 50,
     "white_upper_v": 255,
@@ -18,7 +18,7 @@
     "max_radius": 45,
     "min_area": 700,
     "max_area": 6000,
-    "min_circularity": 0.85
+    "min_circularity": 0.78
   },
   "tracker": {
     "motion_threshold_px": 5.0,
@@ -59,7 +59,7 @@
     "created_at": "2026-01-26T22:45:06.675869Z",
     "distance_scale_factor": 1.0,
     "virtual_deceleration_m_s2": 0.55,
-    "manual_pixels_per_meter": 1135.0,
+    "manual_pixels_per_meter": 0,
     "overlay_radius_scale": 1.15
   },
   "lens_calibration": {
@@ -73,6 +73,65 @@
     "friction_coefficient": 0.15,
     "min_velocity_threshold": 10.0,
     "max_prediction_time_s": 10.0
+  },
+  "multi_camera": {
+    "zed": {
+      "enabled": true,
+      "serial_number": 0,
+      "resolution": "HD720",
+      "fps": 60,
+      "depth_mode": "NEURAL",
+      "min_depth_m": 0.15,
+      "max_depth_m": 2.0,
+      "confidence_threshold": 50,
+      "surface_height_m": 0.45,
+      "auto_exposure_gain": true,
+      "auto_white_balance": true,
+      "exposure": -1,
+      "gain": -1,
+      "whitebalance_temperature": -1,
+      "brightness": -1,
+      "contrast": -1,
+      "saturation": -1,
+      "sharpness": -1,
+      "gamma": -1
+    },
+    "realsense": {
+      "enabled": true,
+      "serial_number": "",
+      "depth_width": 848,
+      "depth_height": 480,
+      "color_width": 848,
+      "color_height": 480,
+      "fps": 60,
+      "depth_visual_preset": "HIGH_ACCURACY",
+      "depth_auto_exposure": true,
+      "emitter_enabled": true,
+      "laser_power": 330.0,
+      "enable_depth_post_processing": true,
+      "color_auto_exposure": true,
+      "color_exposure": 0,
+      "color_gain": 0,
+      "color_auto_white_balance": true,
+      "color_white_balance": 0,
+      "color_sharpness": -1,
+      "color_contrast": -1,
+      "color_saturation": -1,
+      "color_brightness": -1
+    },
+    "club_tracker": {
+      "enabled": true
+    },
+    "enable_sensor_fusion": true,
+    "enable_fast_putt_resolver": true,
+    "sync_tolerance_ms": 20,
+    "require_all_cameras_for_recorded_putts": false,
+    "enable_speed_fusion": true,
+    "fusion_weight_arducam": 0.5,
+    "fusion_weight_zed": 0.35,
+    "fusion_weight_realsense": 0.15,
+    "speed_inconsistency_threshold_m_s": 0.45,
+    "ws_broadcast_lightweight_every_n": 2
   },
   "server_host": "0.0.0.0",
   "server_port": 8000,

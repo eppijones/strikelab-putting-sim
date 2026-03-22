@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Green3D } from './Green3D';
 import { StatsHUD } from './StatsHUD';
-import { ShotFeedback } from './ShotFeedback';
 import { StudioBackground } from './StudioBackground';
 import { NeuralFeedback } from './NeuralFeedback';
 import { ReadyIndicator } from './ReadyIndicator';
@@ -12,6 +11,7 @@ import { DistanceControl } from './DistanceControl';
 import { ShotHistory } from './ShotHistory';
 import { CameraSelector } from './CameraSelector';
 import type { CameraView } from './CameraSelector';
+import ShotDataCard from './ShotDataCard';
 import { usePuttingState } from '../../contexts/WebSocketContext';
 import { Users, History, BarChart3, Settings, Target } from 'lucide-react';
 
@@ -36,8 +36,8 @@ export const PlayMode: React.FC = () => {
       
       {/* Feedback Overlays */}
       <NeuralFeedback />
-      <ShotFeedback />
       <ReadyIndicator />
+      <ShotDataCard />
       
       {/* LEFT SIDEBAR - Controls & Panels */}
       <div className="absolute top-0 left-0 bottom-0 p-4 z-40 flex flex-col pointer-events-none w-96">

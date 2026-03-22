@@ -120,6 +120,94 @@ class PredictionSettings:
 
 
 @dataclass
+class ZedCameraSettings:
+    """ZED 2i stereo depth camera configuration."""
+    enabled: bool = True
+    serial_number: int = 0              # 0 = auto-detect
+    resolution: str = "HD720"           # HD720 (1280x720), HD1080, VGA
+    fps: int = 60
+    depth_mode: str = "NEURAL"          # NEURAL, ULTRA, QUALITY, PERFORMANCE
+    min_depth_m: float = 0.15
+    max_depth_m: float = 2.0
+    confidence_threshold: int = 50
+    surface_height_m: float = 0.45      # Expected depth to putting surface
+    # ZED image tuning (safe defaults: adaptive auto-controls enabled)
+    auto_exposure_gain: bool = True
+    auto_white_balance: bool = True
+    exposure: int = -1                  # Applied only when auto_exposure_gain is False
+    gain: int = -1                      # Applied only when auto_exposure_gain is False
+    whitebalance_temperature: int = -1  # Applied only when auto_white_balance is False
+    brightness: int = -1                # -1 keeps SDK default
+    contrast: int = -1
+    saturation: int = -1
+    sharpness: int = -1
+    gamma: int = -1
+
+
+@dataclass
+class RealSenseSettings:
+    """Intel RealSense D455 depth camera configuration."""
+    enabled: bool = True
+    serial_number: str = ""             # Empty = auto-detect
+    depth_width: int = 848
+    depth_height: int = 480
+    color_width: int = 848
+    color_height: int = 480
+    fps: int = 60
+    # RealSense image/depth tuning profile
+    depth_visual_preset: str = "HIGH_ACCURACY"
+    depth_auto_exposure: bool = True
+    emitter_enabled: bool = True
+    laser_power: float = 330.0
+    enable_depth_post_processing: bool = True
+    color_auto_exposure: bool = True
+    color_exposure: int = 0             # Applied only when color_auto_exposure is False
+    color_gain: int = 0                 # Applied only when color_auto_exposure is False
+    color_auto_white_balance: bool = True
+    color_white_balance: int = 0        # Applied only when color_auto_white_balance is False
+    color_sharpness: int = -1           # -1 keeps firmware default
+    color_contrast: int = -1
+    color_saturation: int = -1
+    color_brightness: int = -1
+
+
+@dataclass
+class ClubTrackerSettings:
+    """Club head tracking configuration."""
+    enabled: bool = True
+    club_height_min_m: float = 0.005
+    club_height_max_m: float = 0.08
+    min_contour_area: int = 100
+    max_contour_area: int = 8000
+    impact_proximity_m: float = 0.04
+    backswing_speed_threshold_m_s: float = 0.15
+
+
+@dataclass
+class MultiCameraConfig:
+    """Multi-camera system configuration."""
+    zed: ZedCameraSettings = field(default_factory=ZedCameraSettings)
+    realsense: RealSenseSettings = field(default_factory=RealSenseSettings)
+    club_tracker: ClubTrackerSettings = field(default_factory=ClubTrackerSettings)
+    enable_sensor_fusion: bool = True
+    enable_fast_putt_resolver: bool = True
+    sync_tolerance_ms: int = 20
+    # Fusion / quality (see SensorFusionPolicy)
+    require_all_cameras_for_recorded_putts: bool = False
+    enable_speed_fusion: bool = True
+    # Keep Arducam as canonical direction unless cross-camera alignment is validated.
+    enable_direction_fusion: bool = False
+    allow_realsense_speed_fusion: bool = False
+    sensor_direction_alignment_valid: bool = False
+    fusion_weight_arducam: float = 0.5
+    fusion_weight_zed: float = 0.35
+    fusion_weight_realsense: float = 0.15
+    speed_inconsistency_threshold_m_s: float = 0.45
+    # WebSocket: every Nth message uses slimmer trajectories (reduces JSON size / CPU)
+    ws_broadcast_lightweight_every_n: int = 2
+
+
+@dataclass
 class Config:
     """Main configuration container."""
     camera: CameraSettings = field(default_factory=CameraSettings)
@@ -128,6 +216,7 @@ class Config:
     calibration: CalibrationData = field(default_factory=CalibrationData)
     lens_calibration: LensCalibrationData = field(default_factory=LensCalibrationData)
     prediction: PredictionSettings = field(default_factory=PredictionSettings)
+    multi_camera: MultiCameraConfig = field(default_factory=MultiCameraConfig)
     
     # Server settings
     server_host: str = "0.0.0.0"
@@ -191,6 +280,7 @@ class ConfigManager:
             "calibration": asdict(self.config.calibration),
             "lens_calibration": asdict(self.config.lens_calibration),
             "prediction": asdict(self.config.prediction),
+            "multi_camera": asdict(self.config.multi_camera),
             "server_host": self.config.server_host,
             "server_port": self.config.server_port,
             "websocket_path": self.config.websocket_path
@@ -210,6 +300,31 @@ class ConfigManager:
             self._update_dataclass(self.config.lens_calibration, data["lens_calibration"])
         if "prediction" in data:
             self._update_dataclass(self.config.prediction, data["prediction"])
+        if "multi_camera" in data:
+            mc = data["multi_camera"]
+            if "zed" in mc:
+                self._update_dataclass(self.config.multi_camera.zed, mc["zed"])
+            if "realsense" in mc:
+                self._update_dataclass(self.config.multi_camera.realsense, mc["realsense"])
+            if "club_tracker" in mc:
+                self._update_dataclass(self.config.multi_camera.club_tracker, mc["club_tracker"])
+            for key in (
+                "enable_sensor_fusion",
+                "enable_fast_putt_resolver",
+                "sync_tolerance_ms",
+                "require_all_cameras_for_recorded_putts",
+                "enable_speed_fusion",
+                "enable_direction_fusion",
+                "allow_realsense_speed_fusion",
+                "sensor_direction_alignment_valid",
+                "fusion_weight_arducam",
+                "fusion_weight_zed",
+                "fusion_weight_realsense",
+                "speed_inconsistency_threshold_m_s",
+                "ws_broadcast_lightweight_every_n",
+            ):
+                if key in mc:
+                    setattr(self.config.multi_camera, key, mc[key])
         
         if "server_host" in data:
             self.config.server_host = data["server_host"]
@@ -231,14 +346,19 @@ class ConfigManager:
         origin_px: tuple,
         forward_direction_deg: float
     ) -> bool:
-        """Update calibration data and save."""
+        """Update calibration data and save, preserving user-tuned fields."""
+        prev = self.config.calibration
         self.config.calibration = CalibrationData(
             version=1,
             homography_matrix=homography_matrix,
             pixels_per_meter=pixels_per_meter,
             origin_px=origin_px,
             forward_direction_deg=forward_direction_deg,
-            created_at=datetime.utcnow().isoformat() + "Z"
+            created_at=datetime.utcnow().isoformat() + "Z",
+            distance_scale_factor=prev.distance_scale_factor,
+            virtual_deceleration_m_s2=prev.virtual_deceleration_m_s2,
+            manual_pixels_per_meter=prev.manual_pixels_per_meter,
+            overlay_radius_scale=prev.overlay_radius_scale,
         )
         return self.save()
     

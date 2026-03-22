@@ -154,6 +154,86 @@ export interface DrillData {
   };
 }
 
+// --- Multi-Camera Types ---
+
+export interface ClubMetricsData {
+  club_path_deg: number;
+  face_angle_deg: number;
+  attack_angle_deg: number;
+  club_speed_m_s: number;
+  stroke_tempo: number;
+  backswing_time_ms: number;
+  forward_swing_time_ms: number;
+  backswing_length_m: number;
+  forward_swing_length_m: number;
+  stroke_phase: string;
+  impact_point?: [number, number];
+  available?: boolean;
+}
+
+export interface BallMetricsData {
+  speed_m_s: number;
+  distance_m: number;
+  direction_deg: number;
+  launch_angle_deg: number;
+  skid_distance_m: number;
+  true_roll_pct: number;
+  carry_distance_m: number;
+  roll_distance_m: number;
+  peak_height_m: number;
+  landing_angle_deg: number;
+  spin_estimate_rpm: number;
+}
+
+export interface ShotReportData {
+  shot_type: 'putt' | 'chip' | 'unknown';
+  ball: BallMetricsData;
+  club: ClubMetricsData;
+  trajectory_2d: number[][];
+  trajectory_3d: number[][];
+  club_path_3d: number[][];
+  result: string;
+  is_made: boolean;
+  cameras_used: string[];
+  fast_putt_resolved: boolean;
+  fast_putt_estimated: boolean;
+}
+
+export interface CameraStatusData {
+  type: string;
+  connected: boolean;
+  running: boolean;
+  fps: number;
+  resolution: number[];
+  error?: string;
+  frame_count?: number;
+  last_frame_age_ms?: number;
+  target_fps?: number;
+  min_healthy_fps?: number;
+  driver_reported_fps?: number;
+  consecutive_read_failures?: number;
+}
+
+export interface MultiCameraState {
+  cameras: Record<string, CameraStatusData>;
+  shot_report: ShotReportData | null;
+  club: {
+    stroke_phase: string;
+    metrics?: ClubMetricsData;
+  };
+  system_health?: {
+    all_streams_reporting: boolean;
+    max_last_frame_age_ms?: number | null;
+    stale_warning: boolean;
+  };
+  tracking_activity?: {
+    game_state: string;
+    arducam_ball_tracking: boolean;
+    zed_club_phase: string;
+    realsense_launch_active: boolean;
+  };
+}
+
 export interface BackendState {
   timestamp_ms: number;
   state: GameState;
@@ -171,10 +251,13 @@ export interface BackendState {
   pixels_per_meter: number;
   overlay_radius_scale: number;
   resolution: [number, number];
+  ready_status?: string;
   // Game logic and session data
   game?: GameState_Data;
   session?: SessionData;
   drill?: DrillData;
+  // Multi-camera data
+  multi_camera?: MultiCameraState;
 }
 
 interface WebSocketContextType {
@@ -183,6 +266,7 @@ interface WebSocketContextType {
   isConnected: boolean;
   // Convenience accessors
   gameState: GameState;
+  readyStatus: string;
   ballPosition: { x: number; y: number } | null;
   pixelsPerMeter: number;
   sendReset: () => void;
@@ -206,6 +290,9 @@ interface WebSocketContextType {
   deleteUser: (userId: number) => Promise<void>;
   resetUserData: (userId: number) => Promise<{ success: boolean; shots_deleted?: number; sessions_deleted?: number }>;
   selectUser: (userId: number | null) => Promise<void>;
+  // Multi-camera
+  multiCamera: MultiCameraState | null;
+  shotReport: ShotReportData | null;
 }
 
 // --- Test Shot Generator ---
@@ -293,17 +380,56 @@ interface WebSocketProviderProps {
 
 export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }) => {
   const [socketUrl] = useState('ws://localhost:8000/ws');
-  
+
+  // Gate WebSocket on backend readiness to avoid hammering an unavailable server.
+  const [backendReady, setBackendReady] = useState(false);
+  const healthPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let delay = 1000;
+
+    const poll = async () => {
+      try {
+        const resp = await fetch('http://localhost:8000/api/health');
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.status === 'ready' || data.status === 'degraded') {
+            if (!cancelled) setBackendReady(true);
+            return;
+          }
+        }
+      } catch {
+        // backend not up yet
+      }
+      if (!cancelled) {
+        delay = Math.min(delay * 1.3, 4000);
+        healthPollRef.current = setTimeout(poll, delay) as unknown as ReturnType<typeof setInterval>;
+      }
+    };
+
+    poll();
+    return () => {
+      cancelled = true;
+      if (healthPollRef.current) clearTimeout(healthPollRef.current as unknown as number);
+    };
+  }, []);
+
   const {
     sendMessage,
     lastJsonMessage: realLastJsonMessage,
     readyState,
   } = useWebSocket<BackendState>(socketUrl, {
     shouldReconnect: () => true,
-    reconnectInterval: 3000,
-    reconnectAttempts: 20,
-    share: false, // share: true can cause loops in strict mode or single provider setups
-  });
+    reconnectInterval: 2000,
+    reconnectAttempts: Infinity,
+    heartbeat: {
+      message: JSON.stringify({ type: 'ping' }),
+      interval: 10000,
+      timeout: 30000,
+    },
+    share: false,
+  }, backendReady);
 
   const isConnected = readyState === ReadyState.OPEN;
   const realPixelsPerMeter = realLastJsonMessage?.pixels_per_meter || 1150;
@@ -313,6 +439,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
   
   // --- User State ---
   const [users, setUsers] = useState<User[]>([]);
+  const hasLoggedUserFetchOfflineRef = useRef(false);
 
   // --- Test Shot State ---
   const [testShot, setTestShot] = useState<TestShotState | null>(null);
@@ -480,15 +607,22 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
 
   // Convenience helpers
   const gameState = lastJsonMessage?.state || 'ARMED';
-  const ballPosition = lastJsonMessage?.ball 
-    ? { x: lastJsonMessage.ball.x_px, y: lastJsonMessage.ball.y_px } 
-    : (lastJsonMessage?.virtual_ball ? { x: lastJsonMessage.virtual_ball.x, y: lastJsonMessage.virtual_ball.y } : null);
+  const readyStatus = lastJsonMessage?.ready_status || 'no_ball';
+  // When ball is not visible (exited frame) or we're in VIRTUAL_ROLLING, use virtual_ball position so 3D ball follows roll
+  const useVirtualPosition = !lastJsonMessage?.ball_visible || gameState === 'VIRTUAL_ROLLING' || gameState === 'STOPPED';
+  const ballPosition = (useVirtualPosition && lastJsonMessage?.virtual_ball)
+    ? { x: lastJsonMessage.virtual_ball.x, y: lastJsonMessage.virtual_ball.y }
+    : (lastJsonMessage?.ball ? { x: lastJsonMessage.ball.x_px, y: lastJsonMessage.ball.y_px } : null);
   const pixelsPerMeter = lastJsonMessage?.pixels_per_meter || 1150;
   
   // Game and session data
   const gameData = lastJsonMessage?.game || null;
   const sessionData = lastJsonMessage?.session || null;
   const drillData = lastJsonMessage?.drill || null;
+  
+  // Multi-camera data
+  const multiCamera = lastJsonMessage?.multi_camera || null;
+  const shotReport = multiCamera?.shot_report || null;
 
   const sendReset = () => {
     // Also cancel test shot on reset
@@ -563,10 +697,14 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
         const data = await response.json();
         if (data.success) {
           setUsers(data.users);
+          hasLoggedUserFetchOfflineRef.current = false;
         }
       }
     } catch (error) {
-      console.error('Error fetching users:', error);
+      if (!hasLoggedUserFetchOfflineRef.current) {
+        console.warn('Backend not reachable yet; user list will load automatically when connected.');
+        hasLoggedUserFetchOfflineRef.current = true;
+      }
     }
   }, []);
 
@@ -633,16 +771,25 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     }
   }, []);
 
-  // Initial load of users
+  // Load users only after backend is confirmed ready; auto-refresh on reconnect.
   useEffect(() => {
-    refreshUsers();
-  }, [refreshUsers]);
+    if (backendReady) {
+      refreshUsers();
+    }
+  }, [backendReady, refreshUsers]);
+
+  useEffect(() => {
+    if (isConnected) {
+      refreshUsers();
+    }
+  }, [isConnected, refreshUsers]);
 
   const value: WebSocketContextType = {
     readyState,
     lastJsonMessage,
     isConnected,
     gameState,
+    readyStatus,
     ballPosition,
     pixelsPerMeter,
     sendReset,
@@ -665,6 +812,9 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     deleteUser,
     resetUserData,
     selectUser,
+    // Multi-camera
+    multiCamera,
+    shotReport,
   };
 
   return (
