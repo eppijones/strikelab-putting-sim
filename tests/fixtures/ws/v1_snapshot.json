@@ -1,0 +1,29 @@
+{
+  "timestamp_ms": 0,
+  "state": "ARMED",
+  "lane": "IDLE",
+  "ball": null,
+  "ball_visible": false,
+  "velocity": null,
+  "prediction": null,
+  "virtual_ball": null,
+  "shot": null,
+  "metrics": {
+    "cap_fps": 120.0,
+    "proc_fps": 118.0,
+    "disp_fps": 60.0,
+    "proc_latency_ms": 4.0,
+    "idle_stddev": 0.1
+  },
+  "calibrated": false,
+  "auto_calibrated": false,
+  "lens_calibrated": false,
+  "pixels_per_meter": 1150.0,
+  "overlay_radius_scale": 1.15,
+  "resolution": [1280, 800],
+  "ready_status": "ready",
+  "game": null,
+  "session": null,
+  "drill": null,
+  "multi_camera": null
+}

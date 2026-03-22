@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { BarChart3, TrendingUp, Target, X, RefreshCw } from 'lucide-react';
+import { apiUrl } from '../../config/backend';
 
 interface StatsData {
   total_putts: number;
@@ -166,8 +167,8 @@ export const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ isOpen, onClose 
         : '/api/stats/all-time';
       
       const [statsRes, trendRes] = await Promise.all([
-        fetch(`http://localhost:8000${endpoint}`),
-        fetch('http://localhost:8000/api/stats/trend')
+        fetch(apiUrl(endpoint)),
+        fetch(apiUrl('/api/stats/trend'))
       ]);
       
       if (statsRes.ok) {

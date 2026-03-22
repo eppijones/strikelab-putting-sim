@@ -222,6 +222,9 @@ class Config:
     server_host: str = "0.0.0.0"
     server_port: int = 8000
     websocket_path: str = "/ws"
+    ws_protocol_version: int = 1
+    ws_v2_enabled: bool = False
+    ws_v2_delta_enabled: bool = False
 
 
 class ConfigManager:

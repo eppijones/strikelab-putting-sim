@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { usePuttingState } from '../../contexts/WebSocketContext';
+import { apiUrl } from '../../config/backend';
 
 interface Shot {
   id?: number;
@@ -28,7 +29,7 @@ export const ShotHistory: React.FC<ShotHistoryProps> = ({ className = '', onClos
     if (!isConnected) return;
     setLoading(true);
     try {
-      const response = await fetch('http://localhost:8000/api/session/history');
+      const response = await fetch(apiUrl('/api/session/history'));
       if (response.ok) {
         const data = await response.json();
         if (data.success) {
@@ -48,7 +49,7 @@ export const ShotHistory: React.FC<ShotHistoryProps> = ({ className = '', onClos
 
   const handleDelete = async (shotId: number) => {
     try {
-      const response = await fetch(`http://localhost:8000/api/shots/${shotId}`, {
+      const response = await fetch(apiUrl(`/api/shots/${shotId}`), {
         method: 'DELETE'
       });
       if (response.ok) {

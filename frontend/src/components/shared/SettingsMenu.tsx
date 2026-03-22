@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Settings, X, Volume2, VolumeX, Target, RotateCcw, ChevronDown, Gauge, Eye } from 'lucide-react';
 import { usePuttingState } from '../../contexts/WebSocketContext';
+import { apiUrl } from '../../config/backend';
 import { useSound } from '../../hooks/useSoundEffects';
 
 // Green speed presets
@@ -31,7 +32,7 @@ export const SettingsMenu: React.FC<SettingsMenuProps> = ({ className = '' }) =>
     const fetchGreenSpeed = async () => {
       if (!isConnected) return;
       try {
-        const res = await fetch('http://localhost:8000/api/green-speed');
+        const res = await fetch(apiUrl('/api/green-speed'));
         if (res.ok) {
           const data = await res.json();
           if (data.current_preset) {
@@ -48,7 +49,7 @@ export const SettingsMenu: React.FC<SettingsMenuProps> = ({ className = '' }) =>
   const handleGreenSpeedChange = async (preset: string) => {
     setGreenSpeed(preset);
     try {
-      await fetch('http://localhost:8000/api/green-speed', {
+      await fetch(apiUrl('/api/green-speed'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ preset })

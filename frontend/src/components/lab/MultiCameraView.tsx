@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { usePuttingState } from '../../contexts/WebSocketContext';
+import { apiUrl } from '../../config/backend';
 import { Video, VideoOff, Activity, RefreshCw } from 'lucide-react';
 
 /**
@@ -224,7 +225,7 @@ const MultiCameraView: React.FC = () => {
         {/* Arducam (primary) */}
         <CameraFeed
           label="Arducam OV9281"
-          streamUrl="http://localhost:8000/api/video"
+          streamUrl={apiUrl('/api/video')}
           status={{
             connected: arducamStatus?.connected ?? (lastJsonMessage !== null),
             running: arducamStatus?.running ?? (lastJsonMessage !== null),
@@ -242,7 +243,7 @@ const MultiCameraView: React.FC = () => {
         {/* ZED 2i */}
         <CameraFeed
           label="ZED 2i Depth"
-          streamUrl="http://localhost:8000/api/video/zed"
+          streamUrl={apiUrl('/api/video/zed')}
           status={zedStatus}
           accent="bg-blue-400"
           roleLabel="3D Ball + Club"
@@ -255,7 +256,7 @@ const MultiCameraView: React.FC = () => {
         {/* RealSense D455 */}
         <CameraFeed
           label="RealSense D455"
-          streamUrl="http://localhost:8000/api/video/realsense"
+          streamUrl={apiUrl('/api/video/realsense')}
           status={rsStatus}
           accent="bg-purple-400"
           roleLabel="Launch / Chip Sensor"
