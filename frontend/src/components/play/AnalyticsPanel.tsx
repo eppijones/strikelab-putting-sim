@@ -43,7 +43,7 @@ const BarChart: React.FC<{
         const barHeight = (item.value / maxValue) * (height - 30);
         return (
           <div key={i} className="flex flex-col items-center gap-1">
-            <div className="text-xs text-white/70 font-medium">
+            <div className="text-xs text-nordic-forest/70 font-medium">
               {item.value.toFixed(0)}%
             </div>
             <div
@@ -54,7 +54,7 @@ const BarChart: React.FC<{
                 opacity: item.value > 0 ? 1 : 0.3
               }}
             />
-            <div className="text-[10px] text-white/50 text-center">
+            <div className="text-[10px] text-nordic-forest/50 text-center">
               {item.label}
             </div>
           </div>
@@ -86,7 +86,7 @@ const DispersionChart: React.FC<{
     ctx.clearRect(0, 0, width, height);
     
     // Draw grid
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.strokeStyle = 'rgba(30, 58, 43, 0.1)';
     ctx.lineWidth = 1;
     
     // Vertical line
@@ -102,7 +102,7 @@ const DispersionChart: React.FC<{
     ctx.stroke();
     
     // Draw hole (center)
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.fillStyle = 'rgba(30, 58, 43, 0.3)';
     ctx.beginPath();
     ctx.arc(centerX, centerY, 8, 0, Math.PI * 2);
     ctx.fill();
@@ -131,7 +131,7 @@ const DispersionChart: React.FC<{
     ctx.globalAlpha = 1;
     
     // Labels
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.fillStyle = 'rgba(30, 58, 43, 0.4)';
     ctx.font = '10px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('SHORT', centerX, height - 5);
@@ -148,7 +148,7 @@ const DispersionChart: React.FC<{
       ref={canvasRef}
       width={200}
       height={200}
-      className="bg-slate-900/50 rounded-lg"
+      className="bg-white/40 rounded-lg border border-white/60 shadow-sm"
     />
   );
 };
@@ -226,26 +226,26 @@ export const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ isOpen, onClose 
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
-            className="fixed inset-4 md:inset-10 bg-slate-900/95 backdrop-blur-xl 
-                     rounded-3xl border border-white/10 z-50 overflow-hidden flex flex-col"
+            className="fixed inset-4 md:inset-10 bg-white/80 backdrop-blur-xl 
+                     rounded-3xl border border-white/80 shadow-2xl z-50 overflow-hidden flex flex-col"
           >
             {/* Header */}
-            <div className="flex items-center justify-between p-6 border-b border-white/10">
+            <div className="flex items-center justify-between p-6 border-b border-white/40">
               <div className="flex items-center gap-3">
-                <BarChart3 size={24} className="text-emerald-400" />
-                <h2 className="text-xl font-bold text-white">Analytics</h2>
+                <BarChart3 size={24} className="text-emerald-600" />
+                <h2 className="text-xl font-bold text-nordic-forest">Analytics</h2>
               </div>
               <div className="flex items-center gap-4">
                 {/* Period selector */}
-                <div className="flex gap-1 bg-white/5 rounded-lg p-1">
+                <div className="flex gap-1 bg-black/5 rounded-lg p-1">
                   {(['all', 'week'] as const).map(p => (
                     <button
                       key={p}
                       onClick={() => setPeriod(p)}
                       className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors
                                 ${period === p 
-                                  ? 'bg-emerald-500 text-white' 
-                                  : 'text-white/60 hover:text-white'}`}
+                                  ? 'bg-emerald-500 text-white shadow-sm' 
+                                  : 'text-nordic-forest/60 hover:text-nordic-forest'}`}
                     >
                       {p === 'all' ? 'All Time' : 'Last 7 Days'}
                     </button>
@@ -256,17 +256,17 @@ export const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ isOpen, onClose 
                 <button
                   onClick={fetchStats}
                   disabled={loading}
-                  className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+                  className="p-2 rounded-lg hover:bg-black/5 transition-colors"
                 >
-                  <RefreshCw size={18} className={`text-white/60 ${loading ? 'animate-spin' : ''}`} />
+                  <RefreshCw size={18} className={`text-nordic-forest/60 ${loading ? 'animate-spin' : ''}`} />
                 </button>
                 
                 {/* Close */}
                 <button
                   onClick={onClose}
-                  className="p-2 rounded-lg hover:bg-white/10 transition-colors"
+                  className="p-2 rounded-lg hover:bg-black/5 transition-colors"
                 >
-                  <X size={20} className="text-white/60" />
+                  <X size={20} className="text-nordic-forest/60" />
                 </button>
               </div>
             </div>
@@ -275,61 +275,61 @@ export const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ isOpen, onClose 
             <div className="flex-1 overflow-y-auto p-6">
               {loading && !stats ? (
                 <div className="flex items-center justify-center h-full">
-                  <div className="text-white/50">Loading...</div>
+                  <div className="text-nordic-forest/50">Loading...</div>
                 </div>
               ) : !stats ? (
                 <div className="flex items-center justify-center h-full">
-                  <div className="text-white/50">No data available yet. Make some putts!</div>
+                  <div className="text-nordic-forest/50">No data available yet. Make some putts!</div>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {/* Overall Stats */}
-                  <div className="bg-slate-800/50 rounded-2xl p-6 border border-white/5">
-                    <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wider mb-4">
+                  <div className="bg-white/40 rounded-2xl p-6 border border-white/60 shadow-sm">
+                    <h3 className="text-sm font-bold text-nordic-forest/60 uppercase tracking-wider mb-4">
                       Overview
                     </h3>
                     <div className="space-y-4">
                       <div className="flex justify-between items-center">
-                        <span className="text-white/70">Total Putts</span>
-                        <span className="text-2xl font-bold text-white">{stats.total_putts}</span>
+                        <span className="text-nordic-forest/70">Total Putts</span>
+                        <span className="text-2xl font-bold text-nordic-forest">{stats.total_putts}</span>
                       </div>
                       <div className="flex justify-between items-center">
-                        <span className="text-white/70">Made</span>
-                        <span className="text-2xl font-bold text-emerald-400">{stats.putts_made}</span>
+                        <span className="text-nordic-forest/70">Made</span>
+                        <span className="text-2xl font-bold text-emerald-600">{stats.putts_made}</span>
                       </div>
                       <div className="flex justify-between items-center">
-                        <span className="text-white/70">Make %</span>
-                        <span className="text-2xl font-bold text-white">{stats.make_percentage}%</span>
+                        <span className="text-nordic-forest/70">Make %</span>
+                        <span className="text-2xl font-bold text-nordic-forest">{stats.make_percentage}%</span>
                       </div>
-                      <div className="h-px bg-white/10 my-2" />
+                      <div className="h-px bg-black/10 my-2" />
                       <div className="flex justify-between items-center">
-                        <span className="text-white/70">Avg Speed</span>
-                        <span className="text-lg font-medium text-white">{stats.avg_speed_m_s} m/s</span>
+                        <span className="text-nordic-forest/70">Avg Speed</span>
+                        <span className="text-lg font-medium text-nordic-forest">{stats.avg_speed_m_s} m/s</span>
                       </div>
                       <div className="flex justify-between items-center">
-                        <span className="text-white/70">Avg Line Error</span>
-                        <span className="text-lg font-medium text-white">{stats.avg_line_error_deg}°</span>
+                        <span className="text-nordic-forest/70">Avg Line Error</span>
+                        <span className="text-lg font-medium text-nordic-forest">{stats.avg_line_error_deg}°</span>
                       </div>
                     </div>
                   </div>
                   
                   {/* Make % by Distance */}
-                  <div className="bg-slate-800/50 rounded-2xl p-6 border border-white/5">
-                    <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wider mb-4">
+                  <div className="bg-white/40 rounded-2xl p-6 border border-white/60 shadow-sm">
+                    <h3 className="text-sm font-bold text-nordic-forest/60 uppercase tracking-wider mb-4">
                       Make % by Distance
                     </h3>
                     {distanceChartData.length > 0 ? (
                       <BarChart data={distanceChartData} />
                     ) : (
-                      <div className="h-32 flex items-center justify-center text-white/30">
+                      <div className="h-32 flex items-center justify-center text-nordic-forest/30">
                         No data
                       </div>
                     )}
                   </div>
                   
                   {/* Miss Pattern */}
-                  <div className="bg-slate-800/50 rounded-2xl p-6 border border-white/5">
-                    <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wider mb-4">
+                  <div className="bg-white/40 rounded-2xl p-6 border border-white/60 shadow-sm">
+                    <h3 className="text-sm font-bold text-nordic-forest/60 uppercase tracking-wider mb-4">
                       Miss Pattern
                     </h3>
                     <div className="flex justify-center">
@@ -338,8 +338,8 @@ export const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ isOpen, onClose 
                   </div>
                   
                   {/* Result Breakdown */}
-                  <div className="bg-slate-800/50 rounded-2xl p-6 border border-white/5">
-                    <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wider mb-4">
+                  <div className="bg-white/40 rounded-2xl p-6 border border-white/60 shadow-sm">
+                    <h3 className="text-sm font-bold text-nordic-forest/60 uppercase tracking-wider mb-4">
                       Result Breakdown
                     </h3>
                     <div className="space-y-3">
@@ -347,19 +347,19 @@ export const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ isOpen, onClose 
                         <div key={result} className="flex items-center gap-3">
                           <div className="flex-1">
                             <div className="flex justify-between mb-1">
-                              <span className="text-sm text-white/70 capitalize">
+                              <span className="text-sm text-nordic-forest/70 capitalize">
                                 {result.replace('_', ' ')}
                               </span>
-                              <span className="text-sm text-white/50">
+                              <span className="text-sm text-nordic-forest/50">
                                 {data.count} ({data.percentage}%)
                               </span>
                             </div>
-                            <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                            <div className="h-2 bg-black/10 rounded-full overflow-hidden">
                               <div
                                 className={`h-full rounded-full transition-all ${
-                                  result === 'made' ? 'bg-emerald-400' :
-                                  result === 'lip_out' ? 'bg-yellow-400' :
-                                  'bg-red-400/60'
+                                  result === 'made' ? 'bg-emerald-500' :
+                                  result === 'lip_out' ? 'bg-yellow-500' :
+                                  'bg-red-500/60'
                                 }`}
                                 style={{ width: `${data.percentage}%` }}
                               />
@@ -372,25 +372,25 @@ export const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ isOpen, onClose 
                   
                   {/* Recent Trend (if we have trend data) */}
                   {trend && trend.made.length > 0 && (
-                    <div className="bg-slate-800/50 rounded-2xl p-6 border border-white/5 md:col-span-2">
-                      <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wider mb-4">
+                    <div className="bg-white/40 rounded-2xl p-6 border border-white/60 shadow-sm md:col-span-2">
+                      <h3 className="text-sm font-bold text-nordic-forest/60 uppercase tracking-wider mb-4">
                         Recent Shots
                       </h3>
                       <div className="flex gap-1 flex-wrap">
                         {trend.made.slice(-50).map((made, i) => (
                           <div
                             key={i}
-                            className={`w-3 h-3 rounded-sm ${made ? 'bg-emerald-400' : 'bg-red-400/60'}`}
+                            className={`w-3 h-3 rounded-sm ${made ? 'bg-emerald-500' : 'bg-red-500/60'}`}
                             title={`Shot ${i + 1}: ${made ? 'Made' : 'Miss'}`}
                           />
                         ))}
                       </div>
-                      <div className="flex gap-4 mt-3 text-xs text-white/40">
+                      <div className="flex gap-4 mt-3 text-xs text-nordic-forest/40">
                         <span className="flex items-center gap-1">
-                          <div className="w-2 h-2 bg-emerald-400 rounded-sm" /> Made
+                          <div className="w-2 h-2 bg-emerald-500 rounded-sm" /> Made
                         </span>
                         <span className="flex items-center gap-1">
-                          <div className="w-2 h-2 bg-red-400/60 rounded-sm" /> Miss
+                          <div className="w-2 h-2 bg-red-500/60 rounded-sm" /> Miss
                         </span>
                       </div>
                     </div>

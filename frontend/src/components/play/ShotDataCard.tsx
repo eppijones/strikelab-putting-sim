@@ -18,23 +18,27 @@ interface MetricTileProps {
 const MetricTile: React.FC<MetricTileProps> = ({ icon, label, value, unit, highlight, small }) => (
   <div className={`
     flex flex-col gap-1 rounded-xl
-    ${highlight ? 'bg-white/10 border border-white/15' : 'bg-white/5 border border-white/8'}
+    ${highlight ? 'bg-white/40 border border-white/60' : 'bg-white/20 border border-white/40'}
     ${small ? 'p-2' : 'p-3'}
   `}>
-    <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-white/50 font-medium">
+    <div className="flex items-center gap-1.5 text-[10px] text-nordic-forest/60 uppercase tracking-widest font-sans font-bold">
       {icon}
       {label}
     </div>
     <div className="flex items-baseline gap-1">
-      <span className={`font-bold text-white ${small ? 'text-lg' : 'text-2xl'}`}>
+      <span className={`font-mono font-bold tracking-tighter text-nordic-forest ${small ? 'text-lg' : 'text-3xl'}`}>
         {value}
       </span>
-      <span className="text-xs text-white/50 font-medium">{unit}</span>
+      <span className="text-xs text-nordic-forest/40 font-medium">{unit}</span>
     </div>
   </div>
 );
 
-const ShotDataCard: React.FC = () => {
+interface ShotDataCardProps {
+  forceHide?: boolean;
+}
+
+const ShotDataCard: React.FC<ShotDataCardProps> = ({ forceHide }) => {
   const { gameState, shotReport } = usePuttingState();
   const [visible, setVisible] = useState(false);
   const [displayReport, setDisplayReport] = useState<ShotReportData | null>(null);
@@ -63,7 +67,7 @@ const ShotDataCard: React.FC = () => {
 
   return (
     <AnimatePresence>
-      {visible && (
+      {visible && !forceHide && (
         <motion.div
           initial={{ opacity: 0, x: -40, scale: 0.95 }}
           animate={{ opacity: 1, x: 0, scale: 1 }}
@@ -72,20 +76,20 @@ const ShotDataCard: React.FC = () => {
           className="fixed bottom-24 left-6 z-[60] w-80 pointer-events-auto"
         >
           <div className="
-            bg-[#1a1f25] border border-white/15
-            rounded-2xl shadow-2xl overflow-hidden
+            bg-white/60 backdrop-blur-md border border-white/80
+            rounded-[24px] shadow-sm overflow-hidden
           ">
             {/* Header */}
-            <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
+            <div className="px-4 py-3 border-b border-white/40 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${isChip ? 'bg-orange-400' : 'bg-emerald-400'}`} />
-                <span className="text-sm font-semibold text-white uppercase tracking-wide">
+                <div className={`w-2 h-2 rounded-full ${isChip ? 'bg-orange-500' : 'bg-emerald-500'}`} />
+                <span className="text-sm font-bold text-nordic-forest uppercase tracking-wide font-sans">
                   {isChip ? 'Chip' : 'Putt'} Analysis
                 </span>
               </div>
               <div className="flex items-center gap-1">
                 {displayReport.cameras_used.map(cam => (
-                  <span key={cam} className="text-[9px] px-1.5 py-0.5 rounded bg-white/10 text-white/50 uppercase font-medium">
+                  <span key={cam} className="text-[9px] px-1.5 py-0.5 rounded bg-black/5 text-nordic-forest/60 uppercase font-bold">
                     {cam}
                   </span>
                 ))}
@@ -174,7 +178,7 @@ const ShotDataCard: React.FC = () => {
             {/* Expandable Section */}
             <button
               onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
-              className="w-full px-4 py-2.5 flex items-center justify-center gap-1.5 text-xs font-medium text-white/60 hover:text-white hover:bg-white/5 active:bg-white/10 transition-colors border-t border-white/10 cursor-pointer select-none"
+              className="w-full px-4 py-2.5 flex items-center justify-center gap-1.5 text-xs font-medium text-nordic-forest/60 hover:text-nordic-forest hover:bg-white/40 active:bg-white/60 transition-colors border-t border-white/40 cursor-pointer select-none"
             >
               {expanded ? 'Less' : 'More Details'}
               <ChevronDown size={12} className={`transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} />
@@ -245,12 +249,12 @@ const ShotDataCard: React.FC = () => {
                     )}
                   </div>
                   {displayReport.fast_putt_resolved && (
-                    <div className="px-4 pb-2 text-[9px] text-emerald-400/60">
+                    <div className="px-4 pb-2 text-[9px] text-emerald-600/80 font-medium">
                       Speed resolved from depth cameras (fast putt)
                     </div>
                   )}
                   {displayReport.fast_putt_estimated && (
-                    <div className="px-4 pb-2 text-[9px] text-amber-400/60">
+                    <div className="px-4 pb-2 text-[9px] text-amber-600/80 font-medium">
                       Speed estimated — depth cameras unavailable (fast putt)
                     </div>
                   )}

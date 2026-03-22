@@ -17,10 +17,10 @@ export const DistanceControl: React.FC<DistanceControlProps> = ({ className = ''
   };
 
   return (
-    <div className={`bg-black/60 backdrop-blur-md rounded-xl border border-white/10 p-4 text-white ${className}`}>
+    <div className={`bg-white/60 backdrop-blur-md rounded-2xl border border-white/80 p-4 shadow-sm text-nordic-forest ${className}`}>
       <div className="flex justify-between items-center mb-3">
-        <h3 className="text-sm font-bold font-mono text-white/80">HOLE DISTANCE</h3>
-        <span className="text-emerald-400 font-mono font-bold">{currentDistance.toFixed(1)}m</span>
+        <h3 className="text-[10px] font-bold font-sans tracking-widest text-nordic-forest/60 uppercase">HOLE DISTANCE</h3>
+        <span className="text-emerald-600 font-mono font-bold">{currentDistance.toFixed(1)}m</span>
       </div>
 
       <div className="mb-4">
@@ -31,9 +31,9 @@ export const DistanceControl: React.FC<DistanceControlProps> = ({ className = ''
           step="0.1"
           value={currentDistance}
           onChange={handleSliderChange}
-          className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+          className="w-full h-2 bg-black/10 rounded-lg appearance-none cursor-pointer accent-emerald-500"
         />
-        <div className="flex justify-between text-xs text-white/30 mt-1 font-mono">
+        <div className="flex justify-between text-xs text-nordic-forest/40 mt-1 font-mono">
           <span>0.5m</span>
           <span>25m</span>
         </div>
@@ -46,8 +46,8 @@ export const DistanceControl: React.FC<DistanceControlProps> = ({ className = ''
             onClick={() => setHoleDistance(dist)}
             className={`px-1 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
               Math.abs(currentDistance - dist) < 0.05
-                ? 'bg-emerald-500 text-white shadow-[0_0_10px_rgba(16,185,129,0.4)]'
-                : 'bg-white/5 hover:bg-white/10 text-white/60 hover:text-white'
+                ? 'bg-emerald-500 text-white shadow-sm'
+                : 'bg-white/40 hover:bg-white/60 text-nordic-forest/60 hover:text-nordic-forest border border-white/40'
             }`}
           >
             {dist < 1 ? `${dist * 100}cm` : `${dist}m`}

@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { Green3D } from './Green3D';
-import { StatsHUD } from './StatsHUD';
 import { StudioBackground } from './StudioBackground';
 import { NeuralFeedback } from './NeuralFeedback';
 import { ReadyIndicator } from './ReadyIndicator';
@@ -26,18 +25,17 @@ export const PlayMode: React.FC = () => {
   const currentUserId = sessionData?.user_id;
   const currentUser = users.find(u => u.id === currentUserId);
 
+  const isLeftPanelOpen = showConsistency || showUserSelector || showHistory || showDrills;
+
   return (
     <div className="relative w-full h-full">
       <StudioBackground />
       <Green3D cameraView={cameraView} />
       
-      {/* Main HUD (Top Center) */}
-      <StatsHUD />
-      
       {/* Feedback Overlays */}
       <NeuralFeedback />
       <ReadyIndicator />
-      <ShotDataCard />
+      <ShotDataCard forceHide={isLeftPanelOpen} />
       
       {/* LEFT SIDEBAR - Controls & Panels */}
       <div className="absolute top-0 left-0 bottom-0 p-4 z-40 flex flex-col pointer-events-none w-96">
