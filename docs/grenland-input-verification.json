@@ -1,0 +1,12 @@
+{
+  "url": "https://grenland-golf.vercel.app/play/grenland",
+  "checks": [
+    "Mocked right-stick swing delivered exactly one full-power shot",
+    "Idle connected gamepad did not interrupt mouse backswing",
+    "Captured mobile-size mouse gesture hit once with room below the control",
+    "Offline reload restored the game and saved round"
+  ],
+  "errors": [],
+  "device": "Emulation and mocked gamepad; not physical DualSense validation",
+  "date": "2026-10-04T09:03:55.963Z"
+}

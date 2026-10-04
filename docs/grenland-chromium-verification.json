@@ -1,0 +1,18 @@
+{
+  "engine": "chromium",
+  "url": "https://grenland-golf.vercel.app/play/grenland",
+  "device": "iPhone 13 emulation; no physical hardware",
+  "checks": [
+    "Course loaded on phone viewport",
+    "Timed putt scored and completed hole",
+    "Score survived reload",
+    "Walking transition to hole 2",
+    "Cart mode and movement",
+    "Returned to ball and scouted shot",
+    "Course remained rendered after orientation change",
+    "Landscape layout without horizontal overflow"
+  ],
+  "errors": [],
+  "requests": [],
+  "date": "2026-10-04T09:03:35.893Z"
+}

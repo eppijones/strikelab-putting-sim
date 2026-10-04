@@ -94,7 +94,7 @@ export const Grass=memo(function Grass({world,anchor,quality}:{world:World;ancho
  },[]);
  const count=quality==='high'?16000:7000;
  const material=useMemo(()=>{
-  const m=new MeshStandardMaterial({color:'#ffffff',side:DoubleSide,roughness:1});
+  const m=new MeshStandardMaterial({color:'#8ba765',side:DoubleSide,roughness:1});
   m.onBeforeCompile=s=>{s.uniforms.windTime=clock.current;s.vertexShader='uniform float windTime;\n'+s.vertexShader;s.vertexShader=s.vertexShader.replace('#include <begin_vertex>',`#include <begin_vertex>\ntransformed.x += sin(windTime*1.3+instanceMatrix[3].x*.45+instanceMatrix[3].z*.31)*position.y*position.y*.12;`);};return m;
  },[]);
  useEffect(()=>{

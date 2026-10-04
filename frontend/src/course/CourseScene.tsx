@@ -94,7 +94,7 @@ function GameView(props:Props&{runtimeRef:React.RefObject<Runtime>}){
   <color attach="background" args={['#a8c5d7']}/><fog attach="fog" args={['#c2d2d5',380,1700]}/>
   <Sky distance={450000} sunPosition={[-180,250,-120]} turbidity={3.2} rayleigh={1.8} mieCoefficient={.003}/>
   <hemisphereLight args={['#e1edfa','#74805a',1.8]}/>
-  <directionalLight ref={sun} position={[ball[0]-45,ball[1]+65,ball[2]-35]} intensity={3.2} color="#fff1d5" castShadow shadow-mapSize={[quality==='high'?2048:1024,quality==='high'?2048:1024]} shadow-camera-left={-35} shadow-camera-right={35} shadow-camera-top={35} shadow-camera-bottom={-35} shadow-camera-near={1} shadow-camera-far={180} shadow-bias={-.00015} shadow-normalBias={.025}/>
+  <directionalLight key={quality} ref={sun} position={[ball[0]-45,ball[1]+65,ball[2]-35]} intensity={3.2} color="#fff1d5" castShadow shadow-mapSize={[quality==='high'?2048:1024,quality==='high'?2048:1024]} shadow-camera-left={quality==='high'?-35:-22} shadow-camera-right={quality==='high'?35:22} shadow-camera-top={quality==='high'?35:22} shadow-camera-bottom={quality==='high'?-35:-22} shadow-camera-near={1} shadow-camera-far={180} shadow-bias={-.00015} shadow-normalBias={.025}/>
   <Terrain world={world}/><Trees course={course} world={world} anchor={anchor} quality={quality}/><Grass world={world} anchor={anchor} quality={quality}/>
   <Golfer actor={golfer} pose={pose}/><Cart actor={cart}/>
   {mode!=='golf'&&<group position={ball}><mesh rotation={[-Math.PI/2,0,0]} position={[0,.07,0]}><ringGeometry args={[1.2,1.4,40]}/><meshBasicMaterial color="#f6d79b" side={2}/></mesh><mesh position={[0,4,0]}><cylinderGeometry args={[.12,.12,8,8]}/><meshBasicMaterial color="#f6d79b" transparent opacity={.22} depthWrite={false}/></mesh></group>}
