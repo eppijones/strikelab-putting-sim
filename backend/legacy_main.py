@@ -10,6 +10,8 @@ import json
 import logging
 import time
 import threading
+import uuid
+from .shot_events import get_shot_journal
 from pathlib import Path
 from typing import Optional, Set, Any, Dict
 from contextlib import asynccontextmanager
@@ -890,7 +892,7 @@ class PuttingSimApp:
             return
         
         shot_result = self._current_state.shot_result
-        ppm = self._shot_locked_ppm or self.get_pixels_per_meter()
+        ppm = getattr(shot_result, 'pixels_per_meter', 0) or self._shot_locked_ppm or self.get_pixels_per_meter()
         
         # Build shot data dict for analysis
         shot_data = {
@@ -899,6 +901,20 @@ class PuttingSimApp:
             'direction_deg': shot_result.initial_direction_deg,
         }
         
+        # Publish once at the completed measurement boundary, before optional analytics.
+        # This deliberately uses frozen impact metrics, never current rolling velocity.
+        try:
+            get_shot_journal().append(
+                shot_id=str(uuid.uuid4()), speed=shot_data['speed_m_s'],
+                direction=shot_data['direction_deg'],
+                forward=getattr(get_config().calibration, 'forward_direction_deg', 0.0),
+                ppm=ppm, calibration_source=self._active_calibration_source,
+                calibrated=self._active_calibration_confidence >= 0.5,
+                estimated=bool(getattr(shot_result, 'fast_putt_estimated', False)),
+            )
+        except Exception:
+            logger.exception('Could not persist launch event')
+
         # Check if drill is active
         drill_state = self.drill_manager.get_state()
         if drill_state.get('active'):

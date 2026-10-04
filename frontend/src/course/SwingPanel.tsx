@@ -1,7 +1,7 @@
 import {useRef} from 'react';
 import type {useSwing} from './useSwing';
 import type {SwingMode} from './swing';
-export default function SwingPanel({swing,mode,disabled}:{swing:ReturnType<typeof useSwing>;mode:SwingMode;disabled:boolean}){
+export default function SwingPanel({swing,mode,disabled,busy}:{swing:ReturnType<typeof useSwing>;mode:SwingMode;disabled:boolean;busy:boolean}){
  const start=useRef<{x:number;y:number;range:number}|null>(null),v=swing.view;
  const timing=['power','path','tempo'].includes(v.phase);
  return <section className={`swing-panel ${disabled?'unavailable':''}`} aria-label="Swing controls">
@@ -14,7 +14,7 @@ export default function SwingPanel({swing,mode,disabled}:{swing:ReturnType<typeo
     onPointerUp={()=>{if(start.current){swing.release();start.current=null;}}}
     onPointerCancel={()=>{start.current=null;swing.reset();}}
     onKeyDown={e=>{if(e.code==='Space'||e.code==='Enter'){e.preventDefault();if(!e.repeat)swing.press();}}}>
-    <span>{disabled?'Watch your shot':v.phase==='ready'?(mode==='analog'?'↓ BACK · ↑ THROUGH':'START SWING'):v.feedback}</span>
+    <span>{disabled?(busy?'Ball in flight…':'Preparing course…'):v.phase==='ready'?(mode==='analog'?'↓ BACK · ↑ THROUGH':'START SWING'):v.feedback}</span>
     <small>{mode==='analog'?'Drag here · right stick · Space for timing':'Space / tap / ✕ · three timed clicks'}</small>
    </button>
  </section>;

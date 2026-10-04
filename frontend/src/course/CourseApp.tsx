@@ -143,8 +143,10 @@ function Game({
   const roundRef = useRef(round);
   const [detail, setDetail] = useState<Tile>();
   const [error, setError] = useState("");
-  const [club, setClub] = useState(course.mode === "preview" ? 0 : 9),
-    [power, setPower] = useState(90),
+  const [sceneReady,setSceneReady]=useState(false);
+  const sceneLoaded=useCallback(()=>setSceneReady(true),[]);
+  const [club, setClub] = useState(()=>distance(round.ball,course.practice[round.hole].pin)<35?13:course.mode === "preview" ? 0 : 9),
+    [power, setPower] = useState(()=>{const d=distance(round.ball,course.practice[round.hole].pin);return d<35?Math.max(1,Math.min(100,Math.round(Math.sqrt(2*9.81*.056*d)/CLUBS[13].speed*100))):90;}),
     [aim, setAim] = useState(0);
   const [stimp, setStimp] = useState(() => {
     try {
@@ -191,6 +193,7 @@ function Game({
   const [cameraMode,setCameraMode]=useState<"player"|"scout">("player");
   const [showGrid,setShowGrid]=useState(true);
   const [journey,setJourney]=useState<Vec3>();
+  const [travelDistance,setTravelDistance]=useState(0);
   const [strikeFeedback,setStrikeFeedback]=useState("");
   const [caddieBusy, setCaddieBusy] = useState(false),
     [caddieNote, setCaddieNote] = useState("");
@@ -217,7 +220,7 @@ function Game({
     detailReady: false,
     modal: false,
   });
-  const detailReady = detail?.url === hole.tile.url;
+  const detailReady = detail?.url === hole.tile.url && sceneReady;
   useEffect(() => {
     latest.current = {
       world,
@@ -336,7 +339,7 @@ function Game({
     }
   }, []);
   const nextHole = useCallback(() => {
-    if (busyRef.current) return;
+    if (busyRef.current||roundRef.current.scores[roundRef.current.hole]===null) return;
     const next = advance(roundRef.current, course);
     if (persist(next)) {
       swingAPI.current.reset();
@@ -383,7 +386,7 @@ function Game({
       if (event.code === "KeyV") setCameraMode(v=>v==="player"?"scout":"player");
       if (event.code === "KeyG") setShowGrid(v=>!v);
       if (event.code === "KeyN") nextHole();
-      if (event.code === "KeyC") setClub((c) => (c + 1) % CLUBS.length);
+      if (event.code === "KeyC"&&!busyRef.current) setClub((c) => (c + 1) % CLUBS.length);
       if (event.code === "Tab") {
         event.preventDefault();
         setShowScore((v) => !v);
@@ -745,6 +748,8 @@ function Game({
             mode={mode}
             input={controls}
             onSettled={settled}
+            onReady={sceneLoaded}
+            onTravelDistance={setTravelDistance}
             quality={quality}
             swing={swing.controller}
             club={club}
@@ -755,6 +760,7 @@ function Game({
           />
         </Suspense>
         </ErrorBoundary>
+        {!sceneReady&&<div className="course-preparing" role="status">Preparing golfer and course…</div>}
       </div>
       <header className="course-topbar">
         <a className="course-brand" href="/play/grenland">
@@ -815,7 +821,7 @@ function Game({
           <span>⚑ PRACTICE PIN</span>
         </div>
       </section>
-      <div className="course-round-badge"><span>YOUR ROUND</span><strong>{relativeScore===0?"E":`${relativeScore>0?"+":""}${relativeScore}`}</strong><small>{played} THRU · {total} STROKES</small></div>
+      <div className="course-round-badge"><span>YOUR ROUND</span><strong>{relativeScore===0?"E":`${relativeScore>0?"+":""}${relativeScore}`}</strong><small>{played} THRU · {total+(!holeComplete?round.strokes:0)} STROKES</small></div>
       <div className="course-distance">
         <span className="course-eyebrow">TO THE PIN</span>
         <strong>
@@ -943,13 +949,13 @@ function Game({
             />
             <small>Estimated {distance(round.ball,preview).toFixed(0)} m total</small>
           </label>
-          <SwingPanel swing={swing} mode={swingMode} disabled={!canShoot}/>
+          <SwingPanel swing={swing} mode={swingMode} disabled={!canShoot} busy={busy}/>
         </section>
       ) : (
         <section className="course-movement-panel">
           <span>
             {mode === "walk" ? "Explore on foot" : "Explore by cart"} · WASD /
-            left stick
+            left stick · {Math.round(travelDistance)} m to next shot
           </span>
           <div>
             {[
@@ -979,7 +985,7 @@ function Game({
           <button onClick={() => setMode("golf")}>Return to ball</button>
         </section>
       )}
-      {strikeFeedback&&!busy&&!caddieNote&&<div className="course-strike-feedback">{strikeFeedback}</div>}
+      {strikeFeedback&&!busy&&!caddieNote&&!holeComplete&&<div className="course-strike-feedback">{strikeFeedback}</div>}
       {caddieNote && !busy && (
         <div className="course-caddie-note" role="status">
           {caddieNote}

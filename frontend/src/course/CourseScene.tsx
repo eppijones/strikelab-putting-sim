@@ -1,4 +1,4 @@
-import {memo,useMemo,useRef,useState} from 'react';
+import {memo,useEffect,useMemo,useRef,useState} from 'react';
 import {Canvas,useFrame} from '@react-three/fiber';
 import {OrbitControls,Sky,Line,RoundedBox} from '@react-three/drei';
 import {ACESFilmicToneMapping,Vector3,type Group,type Mesh,type DirectionalLight} from 'three';
@@ -9,7 +9,8 @@ import type {SwingController} from './swing';
 
 export type TravelMode='golf'|'walk'|'cart';
 export interface Controls {forward:number;turn:number;gamepad:boolean}
-interface Props {course:Course;world:World;ball:Vec3;bearing:number;result?:ShotResult;motion:number;mode:TravelMode;input:React.RefObject<Controls>;onSettled:()=>void;quality:'balanced'|'high';swing:React.RefObject<SwingController>;club:number;cameraMode:'player'|'scout';preview:Vec3;journey?:Vec3;showGrid:boolean}
+interface Props {course:Course;world:World;ball:Vec3;bearing:number;result?:ShotResult;motion:number;mode:TravelMode;input:React.RefObject<Controls>;onSettled:()=>void;onReady:()=>void;onTravelDistance:(metres:number)=>void;quality:'balanced'|'high';swing:React.RefObject<SwingController>;club:number;cameraMode:'player'|'scout';preview:Vec3;journey?:Vec3;showGrid:boolean}
+interface Runtime {animation:{motion:number;time:number;done:boolean;start:Vec3};traveler:{position:Vector3;heading:number}}
 
 function Cart({actor}:{actor:React.RefObject<Group|null>}){
  return <group ref={actor}>
@@ -29,17 +30,17 @@ function GreenGrid({world,ball}:{world:World;ball:Vec3}){
  return <group>{lines.map((l,i)=><Line key={i} points={l} color="#e8efc4" transparent opacity={.18} lineWidth={.6}/>)}</group>;
 }
 
-function GameView(props:Props){
- const {course,world,ball,bearing,result,motion,mode,input,onSettled,quality,swing,club,cameraMode,preview,journey,showGrid}=props;
+function GameView(props:Props&{runtimeRef:React.RefObject<Runtime>}){
+ const {course,world,ball,bearing,result,motion,mode,input,onSettled,onReady,quality,swing,club,cameraMode,preview,journey,showGrid,runtimeRef}=props;
+ useEffect(()=>onReady(),[onReady]);
  const ballMesh=useRef<Mesh>(null),golfer=useRef<Group>(null),cart=useRef<Group>(null),sun=useRef<DirectionalLight>(null);
  const controls=useRef<React.ComponentRef<typeof OrbitControls>>(null);
- const animation=useRef({motion:-1,time:0,done:true,start:[...ball] as Vec3});
- const traveler=useRef({position:new Vector3(...ball),heading:bearing});
  const pose=useRef<Pose>({walking:0,time:0,swing:swing.current,follow:0,putting:club===13});
- const lastMode=useRef<TravelMode>('golf'),lastKey=useRef(''),lastJourney=useRef<Vec3|undefined>(undefined);
+ const lastMode=useRef<TravelMode>(mode),lastKey=useRef(''),lastJourney=useRef<Vec3|undefined>(undefined);
  const [anchor,setAnchor]=useState<Vec3>(()=>[...ball]);
+ const lastTravelReport=useRef(-1);
  useFrame(({camera,size},delta)=>{
-  const dt=Math.min(delta,.05),anim=animation.current;
+  const dt=Math.min(delta,.05),anim=runtimeRef.current.animation;
   if(anim.motion!==motion){anim.motion=motion;anim.time=0;anim.done=!result;anim.start=result?[...result.path[0]]:[...ball];}
   let visual:Vec3=ball;
   if(result&&!anim.done){
@@ -50,7 +51,7 @@ function GameView(props:Props){
   }
   ballMesh.current?.position.set(visual[0],visual[1]+.03,visual[2]);
   pose.current.time+=dt;pose.current.swing=swing.current;pose.current.putting=club===13;pose.current.follow=!anim.done?Math.min(1,anim.time*2.5):0;
-  const t=traveler.current;
+  const t=runtimeRef.current.traveler;
   if(mode!=='golf'){
    if(lastMode.current==='golf'){
     const start=journey&&lastJourney.current!==journey?journey:ball;t.position.set(...start);t.heading=distance(start,ball)>3?bearingTo(start,ball):bearing;lastJourney.current=journey;
@@ -61,6 +62,7 @@ function GameView(props:Props){
    if(cart.current){cart.current.visible=mode==='cart';cart.current.position.copy(t.position);cart.current.rotation.y=-t.heading;}
    if(golfer.current){golfer.current.visible=mode==='walk';golfer.current.position.copy(t.position);golfer.current.rotation.y=Math.PI-t.heading;}
    pose.current.walking=Math.abs(input.current.forward);
+   if(pose.current.time-lastTravelReport.current>.5){props.onTravelDistance(Math.hypot(t.position.x-ball[0],t.position.z-ball[2]));lastTravelReport.current=pose.current.time;}
    const behind=mode==='cart'?6.5:3.8,desired=new Vector3(t.position.x-Math.sin(t.heading)*behind,t.position.y+(mode==='cart'?3:2.25),t.position.z+Math.cos(t.heading)*behind);
    desired.y=Math.max(desired.y,heightAt(world,desired.x,desired.z)+.65);camera.position.lerp(desired,1-Math.exp(-dt*6));camera.lookAt(t.position.x+Math.sin(t.heading)*2,t.position.y+1.25,t.position.z-Math.cos(t.heading)*2);
   }else{
@@ -68,7 +70,7 @@ function GameView(props:Props){
    const start=!anim.done?anim.start:ball;
    if(golfer.current){golfer.current.visible=true;const x=start[0]-Math.cos(bearing)*.72,z=start[2]-Math.sin(bearing)*.72;golfer.current.position.set(x,heightAt(world,x,z),z);golfer.current.rotation.y=Math.PI/2-bearing;}
    const narrow=size.width/size.height<.8,offset=narrow?-.4:1.3;
-   const key=ball.join(',')+motion+cameraMode+Math.round(bearing*100)+(anim.done?'rest':'shot')+narrow;
+   const key=ball.join(',')+motion+cameraMode+Math.round(bearing*100)+(anim.done?'rest':'shot')+narrow+(cameraMode==='scout'?preview.map(Math.round).join(','):'');
    if(lastKey.current!==key||lastMode.current!=='golf'){
     const scout=cameraMode==='scout',focus=scout?preview:start;
     const back=scout?25:narrow?6.5:4.8;
@@ -105,4 +107,15 @@ function GameView(props:Props){
   <OrbitControls ref={controls} enabled={mode==='golf'} enablePan={cameraMode==='scout'} minDistance={1.5} maxDistance={220} maxPolarAngle={Math.PI/2-.05}/>
  </>;
 }
-export default memo(function CourseScene(props:Props){return <Canvas shadows dpr={[1,props.quality==='high'?1.75:1.15]} camera={{position:[props.ball[0],props.ball[1]+3,props.ball[2]+5],fov:55,near:.08,far:5000}} gl={{antialias:true,powerPreference:'high-performance',toneMapping:ACESFilmicToneMapping,toneMappingExposure:1}}><GameView {...props}/></Canvas>;});
+export default memo(function CourseScene(props:Props){
+ const [surfaceKey,setSurfaceKey]=useState(0);
+ const runtime=useRef<Runtime>({animation:{motion:-1,time:0,done:true,start:[...props.ball]},traveler:{position:new Vector3(...props.ball),heading:props.bearing}});
+ useEffect(()=>{
+  // WebKit can retain a transparent compositor surface after an orientation
+  // resize. Recreate that surface while keeping the shot and travel state.
+  if(!/AppleWebKit/.test(navigator.userAgent)||/Chrome|Chromium|Edg|OPR/.test(navigator.userAgent))return;
+  const orientation=matchMedia('(orientation: portrait)'),reset=()=>setSurfaceKey(k=>k+1);
+  orientation.addEventListener('change',reset);return()=>orientation.removeEventListener('change',reset);
+ },[]);
+ return <Canvas key={surfaceKey} shadows dpr={[1,props.quality==='high'?1.75:1.15]} camera={{position:[props.ball[0],props.ball[1]+3,props.ball[2]+5],fov:55,near:.08,far:5000}} gl={{antialias:true,alpha:false,powerPreference:'high-performance',toneMapping:ACESFilmicToneMapping,toneMappingExposure:1}}><GameView {...props} runtimeRef={runtime}/></Canvas>;
+});

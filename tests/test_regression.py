@@ -197,7 +197,7 @@ class AcceptanceTestResult:
         return f"[{status}] {self.name}: {self.message}"
 
 
-def test_idle_stability(metrics: ReplayMetrics, max_stddev: float = 2.0) -> AcceptanceTestResult:
+def evaluate_idle_stability(metrics: ReplayMetrics, max_stddev: float = 2.0) -> AcceptanceTestResult:
     """
     Test: Ball stationary -> position stddev < 2px over 5 seconds.
     """
@@ -219,7 +219,7 @@ def test_idle_stability(metrics: ReplayMetrics, max_stddev: float = 2.0) -> Acce
     )
 
 
-def test_impact_latency(metrics: ReplayMetrics, max_frames: int = 2) -> AcceptanceTestResult:
+def evaluate_impact_latency(metrics: ReplayMetrics, max_frames: int = 2) -> AcceptanceTestResult:
     """
     Test: Motion start -> TRACKING state within ≤ 2 frames.
     """
@@ -244,7 +244,7 @@ def test_impact_latency(metrics: ReplayMetrics, max_frames: int = 2) -> Acceptan
     )
 
 
-def test_speed_availability(metrics: ReplayMetrics, max_frames: int = 5) -> AcceptanceTestResult:
+def evaluate_speed_availability(metrics: ReplayMetrics, max_frames: int = 5) -> AcceptanceTestResult:
     """
     Test: First stable speed estimate within ≤ 5 frames post-impact.
     """
@@ -269,7 +269,7 @@ def test_speed_availability(metrics: ReplayMetrics, max_frames: int = 5) -> Acce
     )
 
 
-def test_no_false_shots(metrics: ReplayMetrics) -> AcceptanceTestResult:
+def evaluate_no_false_shots(metrics: ReplayMetrics) -> AcceptanceTestResult:
     """
     Test: No false shot triggers during setup/waggle.
     """
@@ -286,10 +286,10 @@ def test_no_false_shots(metrics: ReplayMetrics) -> AcceptanceTestResult:
 def run_acceptance_tests(metrics: ReplayMetrics) -> List[AcceptanceTestResult]:
     """Run all acceptance tests on collected metrics."""
     results = [
-        test_idle_stability(metrics),
-        test_impact_latency(metrics),
-        test_speed_availability(metrics),
-        test_no_false_shots(metrics),
+        evaluate_idle_stability(metrics),
+        evaluate_impact_latency(metrics),
+        evaluate_speed_availability(metrics),
+        evaluate_no_false_shots(metrics),
     ]
     
     return results

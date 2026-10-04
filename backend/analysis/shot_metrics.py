@@ -7,6 +7,10 @@ and future Unreal Engine API consumption.
 
 from dataclasses import dataclass, field, asdict
 from enum import Enum
+import time
+import itertools
+
+_report_ids = itertools.count(time.time_ns() // 1000)
 from typing import Optional, List, Tuple
 
 
@@ -66,8 +70,8 @@ class ShotReport:
     Complete shot report combining all available sensor data.
     This is the primary data structure for the API and frontend.
     """
-    shot_id: int = 0
-    timestamp_ms: float = 0.0
+    shot_id: int = field(default_factory=lambda: next(_report_ids))
+    timestamp_ms: float = field(default_factory=lambda: time.time_ns() / 1_000_000)
     shot_type: ShotType = ShotType.PUTT
 
     ball: BallMetrics = field(default_factory=BallMetrics)

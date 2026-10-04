@@ -8,6 +8,7 @@ from typing import Optional
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from . import legacy_main
 from .dependencies import build_services
@@ -24,6 +25,7 @@ from .routers.video import router as video_router
 from .services.runtime_service import RuntimeService
 from .ws.broadcaster import BroadcastState, broadcast_state
 from .ws.endpoint import create_ws_router
+from .ws.shots import router as shots_router
 
 
 def _resolve_frontend_path() -> Path:
@@ -86,8 +88,26 @@ def create_app(runtime_service: Optional[RuntimeService] = None) -> FastAPI:
     if frontend_path.exists():
         app.mount("/static", StaticFiles(directory=str(frontend_path)), name="static")
 
+    if (frontend_path / 'index.html').exists():
+        @app.get('/play/grenland')
+        @app.get('/play/grenland/')
+        async def grenland_game():
+            return FileResponse(frontend_path / 'index.html')
+
+        for directory in ('assets', 'courses'):
+            if (frontend_path / directory).is_dir():
+                app.mount('/' + directory, StaticFiles(directory=str(frontend_path / directory)), name=directory)
+        for filename in ('sw.js', 'manifest.webmanifest', 'golf-icon.svg'):
+            if (frontend_path / filename).is_file():
+                def file_route(name):
+                    async def route():
+                        return FileResponse(frontend_path / name)
+                    return route
+                app.add_api_route('/' + filename, file_route(filename), methods=['GET'])
+
     for router in (
         health_router,
+        shots_router,
         video_router,
         config_router,
         game_router,

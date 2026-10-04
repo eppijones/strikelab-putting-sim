@@ -1,0 +1,134 @@
+{
+  "mode": "18-hole community preview",
+  "method": "Deterministic physics from each mapped tee; caddie controls shots; save/restore after each shot. No browser or physical hardware claim.",
+  "complete": true,
+  "total": 49,
+  "holes": [
+    {
+      "hole": 1,
+      "name": "01 · Myhra",
+      "par": 4,
+      "score": 2,
+      "remaining_m": 0
+    },
+    {
+      "hole": 2,
+      "name": "02 · Mors Ekre",
+      "par": 4,
+      "score": 3,
+      "remaining_m": 0
+    },
+    {
+      "hole": 3,
+      "name": "03 · Postbakken",
+      "par": 3,
+      "score": 1,
+      "remaining_m": 0
+    },
+    {
+      "hole": 4,
+      "name": "04 · Habakken",
+      "par": 5,
+      "score": 3,
+      "remaining_m": 0
+    },
+    {
+      "hole": 5,
+      "name": "05 · Nøklegaard",
+      "par": 4,
+      "score": 3,
+      "remaining_m": 0
+    },
+    {
+      "hole": 6,
+      "name": "06 · Glenna",
+      "par": 3,
+      "score": 3,
+      "remaining_m": 0
+    },
+    {
+      "hole": 7,
+      "name": "07 · Luksefjellveien",
+      "par": 5,
+      "score": 3,
+      "remaining_m": 0
+    },
+    {
+      "hole": 8,
+      "name": "08 · Linkåsa",
+      "par": 4,
+      "score": 3,
+      "remaining_m": 0
+    },
+    {
+      "hole": 9,
+      "name": "09 · Utsikten",
+      "par": 4,
+      "score": 3,
+      "remaining_m": 0
+    },
+    {
+      "hole": 10,
+      "name": "10 · Haugen",
+      "par": 3,
+      "score": 3,
+      "remaining_m": 0
+    },
+    {
+      "hole": 11,
+      "name": "11 · Legda",
+      "par": 5,
+      "score": 3,
+      "remaining_m": 0
+    },
+    {
+      "hole": 12,
+      "name": "12 · Skrehelle",
+      "par": 4,
+      "score": 3,
+      "remaining_m": 0
+    },
+    {
+      "hole": 13,
+      "name": "13 · Grønli",
+      "par": 4,
+      "score": 3,
+      "remaining_m": 0
+    },
+    {
+      "hole": 14,
+      "name": "14 · Skrubbmyr",
+      "par": 4,
+      "score": 3,
+      "remaining_m": 0
+    },
+    {
+      "hole": 15,
+      "name": "15 · Sandbakken",
+      "par": 3,
+      "score": 2,
+      "remaining_m": 0
+    },
+    {
+      "hole": 16,
+      "name": "16 · Oppjordet",
+      "par": 5,
+      "score": 3,
+      "remaining_m": 0
+    },
+    {
+      "hole": 17,
+      "name": "17 · Hoppbakken",
+      "par": 4,
+      "score": 3,
+      "remaining_m": 0
+    },
+    {
+      "hole": 18,
+      "name": "18 · Myhrajordet",
+      "par": 4,
+      "score": 2,
+      "remaining_m": 0
+    }
+  ]
+}
