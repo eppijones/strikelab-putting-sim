@@ -34,5 +34,76 @@
     "last_verified_balance": 11445,
     "purchases": 0
   },
-  "hosted_verification": "pending deployment"
+  "hosted_verification": {
+    "url": "https://grenland-golf.vercel.app/play/grenland/myhra",
+    "code_commit": "71ed2e6f1041dbb7ed6fd7433d9bed23533f0ae5",
+    "vercel_deployment": "3snZqVbYRSisLv1sUUhgZKtU8Fgh",
+    "status": "Ready, production",
+    "chrome_round": {
+      "url": "https://grenland-golf.vercel.app/play/grenland/myhra",
+      "completed": true,
+      "errors": [],
+      "save": {
+        "version": 1,
+        "ball": [
+          384,
+          2.5746533155441282,
+          241.33
+        ],
+        "strokes": 4,
+        "complete": true,
+        "history": [
+          {
+            "club": "Driver",
+            "distance": 187.57782073681446,
+            "carry": 145.6421866706547,
+            "lie": "fairway",
+            "penalty": 0
+          },
+          {
+            "club": "6 iron",
+            "distance": 136.37859675072147,
+            "carry": 109.52058919389579,
+            "lie": "fairway",
+            "penalty": 0
+          },
+          {
+            "club": "Putter",
+            "distance": 8.36395042530039,
+            "carry": 0,
+            "lie": "green",
+            "penalty": 0
+          },
+          {
+            "club": "Putter",
+            "distance": 0.22582414066140413,
+            "carry": 0,
+            "lie": "green",
+            "penalty": 0
+          }
+        ]
+      }
+    },
+    "webkit": {
+      "url": "https://grenland-golf.vercel.app/play/grenland/myhra",
+      "engine": "WebKit",
+      "touchTimingCompleted": true,
+      "strokes": 1,
+      "resume": true,
+      "rotation": true,
+      "dayControl": true,
+      "errors": []
+    },
+    "controls": {
+      "url": "https://grenland-golf.vercel.app/play/grenland/myhra",
+      "normalKmh": 23,
+      "boostKmh": 43,
+      "joystick": true,
+      "aimCameraIndependent": true,
+      "keyboardSwing": true,
+      "standardGamepadSimulated": true,
+      "holeNavigationRetainsBothSaves": true,
+      "errors": []
+    }
+  }
 }

@@ -1,7 +1,7 @@
 {
-  "url": "http://127.0.0.1:5173/play/grenland/myhra",
-  "normalKmh": 24,
-  "boostKmh": 71,
+  "url": "https://grenland-golf.vercel.app/play/grenland/myhra",
+  "normalKmh": 23,
+  "boostKmh": 43,
   "joystick": true,
   "aimCameraIndependent": true,
   "keyboardSwing": true,

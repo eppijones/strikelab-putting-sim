@@ -1,5 +1,5 @@
 {
-  "url": "http://127.0.0.1:5173/play/grenland/myhra",
+  "url": "https://grenland-golf.vercel.app/play/grenland/myhra",
   "engine": "WebKit",
   "touchTimingCompleted": true,
   "strokes": 1,

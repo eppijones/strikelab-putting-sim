@@ -1,5 +1,5 @@
 {
-  "url": "http://127.0.0.1:5173/play/grenland/myhra",
+  "url": "https://grenland-golf.vercel.app/play/grenland/myhra",
   "completed": true,
   "errors": [],
   "save": {
@@ -21,21 +21,21 @@
       },
       {
         "club": "6 iron",
-        "distance": 136.751205072825,
-        "carry": 109.58088391304489,
+        "distance": 136.37859675072147,
+        "carry": 109.52058919389579,
         "lie": "fairway",
         "penalty": 0
       },
       {
         "club": "Putter",
-        "distance": 9.399522285393026,
+        "distance": 8.36395042530039,
         "carry": 0,
         "lie": "green",
         "penalty": 0
       },
       {
         "club": "Putter",
-        "distance": 1.3536016701872537,
+        "distance": 0.22582414066140413,
         "carry": 0,
         "lie": "green",
         "penalty": 0
