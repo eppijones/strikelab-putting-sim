@@ -1,0 +1,39 @@
+{
+  "generated": "2026-10-04",
+  "textures": [
+    {
+      "file": "fairway.webp",
+      "source": "Existing DZ_Grasses Unreal texture export",
+      "sha256": "7ab1e764d2d1c6a157610621002bbc29927ae0873c88f7c77907f9b7aa936bfa"
+    },
+    {
+      "file": "fairway-normal.webp",
+      "source": "Existing DZ_Grasses Unreal texture export",
+      "sha256": "8007bbf552c810e9e17f6268d335177ceb128155de76dfa350edbeae7fded354"
+    },
+    {
+      "file": "green.webp",
+      "source": "Existing DZ_Grasses Unreal texture export",
+      "sha256": "9754c87038def5571f7c9d8c9b6a61d923f00d07c0d4a03614bff64508e214e4"
+    },
+    {
+      "file": "rough.webp",
+      "source": "Existing DZ_Grasses Unreal texture export",
+      "sha256": "08327b0a4fc94b5c16d601b62e0e1d224470b751c9a7813d0e3723f08eb8195b"
+    },
+    {
+      "file": "sand.webp",
+      "source": "Existing DZ_Grasses Unreal texture export",
+      "sha256": "0fc14e43d3452ba8b41e98ff7ff37ba036b7c06c3b5fcd962998657e1e25a7c5"
+    },
+    {
+      "file": "sand-normal.webp",
+      "source": "Existing DZ_Grasses Unreal texture export",
+      "sha256": "762fabf9a20f9b16b03426d925a7ba621d85db3aae21e5d75626fcf463f8f592"
+    }
+  ],
+  "tree": "Existing Megaplant_Library Norway Maple via FBX and Blender; explicit leaf cards rebuilt for WebGL",
+  "terrain": "Existing Kartverket-derived course data; no geometry fabricated",
+  "golfer": "Existing NewMetaHumanCharacter body and clothing LOD1 via FBX and Blender; face LOD4 GLB; procedural rig animation",
+  "license_note": "Original project assets incorporated in the game; no Spiderbench code or assets used. No paid generation."
+}

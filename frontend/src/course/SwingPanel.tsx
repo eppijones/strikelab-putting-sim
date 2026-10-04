@@ -1,0 +1,21 @@
+import {useRef} from 'react';
+import type {useSwing} from './useSwing';
+import type {SwingMode} from './swing';
+export default function SwingPanel({swing,mode,disabled}:{swing:ReturnType<typeof useSwing>;mode:SwingMode;disabled:boolean}){
+ const start=useRef<{x:number;y:number;range:number}|null>(null),v=swing.view;
+ const timing=['power','path','tempo'].includes(v.phase);
+ return <section className={`swing-panel ${disabled?'unavailable':''}`} aria-label="Swing controls">
+   <div className="swing-top"><span>{timing?v.phase.toUpperCase():mode==='analog'?'SWING STICK':'THREE CLICK'}</span><b>{Math.round(v.amount*100)}%</b></div>
+   <div className="swing-meter" role="meter" aria-label="Swing power" aria-valuemin={0} aria-valuemax={108} aria-valuenow={Math.round(v.amount*100)}><i style={{width:`${Math.min(100,v.amount*100)}%`}}/><em/></div>
+   {(v.phase==='path'||v.phase==='tempo')&&<div className="swing-accuracy"><i/><b style={{left:`${50+v.needle*47}%`}}/></div>}
+   <button className="swing-pad" disabled={disabled} aria-label={mode==='analog'?'Drag down then up to swing':'Click swing timing'}
+    onPointerDown={e=>{if(mode==='analog'&&!timing){e.currentTarget.setPointerCapture(e.pointerId);start.current={x:e.clientX,y:e.clientY,range:Math.max(30,Math.min(100,window.innerHeight-e.clientY-12))};swing.begin();}else swing.press();}}
+    onPointerMove={e=>{if(start.current)swing.move((e.clientY-start.current.y)/start.current.range,(e.clientX-start.current.x)/100);}}
+    onPointerUp={()=>{if(start.current){swing.release();start.current=null;}}}
+    onPointerCancel={()=>{start.current=null;swing.reset();}}
+    onKeyDown={e=>{if(e.code==='Space'||e.code==='Enter'){e.preventDefault();if(!e.repeat)swing.press();}}}>
+    <span>{disabled?'Watch your shot':v.phase==='ready'?(mode==='analog'?'↓ BACK · ↑ THROUGH':'START SWING'):v.feedback}</span>
+    <small>{mode==='analog'?'Drag here · right stick · Space for timing':'Space / tap / ✕ · three timed clicks'}</small>
+   </button>
+ </section>;
+}

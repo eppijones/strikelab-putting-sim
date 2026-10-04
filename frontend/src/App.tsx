@@ -79,6 +79,7 @@ const AppContent: React.FC = () => {
   return (
     <div className="fixed inset-0 w-full h-full overflow-hidden bg-[#F2F0EB] text-white selection:bg-sl-green selection:text-sl-dark">
       <GameSoundManager />
+      <a href="/play/grenland" className="fixed bottom-5 left-5 z-50 rounded-full bg-emerald-900 px-6 py-3 text-white shadow-lg">Play Grenland</a>
       <ConnectionStatus />
       {/* Top right controls */}
       <div className="fixed top-4 right-4 z-50 flex items-center gap-3">

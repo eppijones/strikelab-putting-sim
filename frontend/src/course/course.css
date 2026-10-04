@@ -1,0 +1,822 @@
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap");
+.grenland-app {
+  position: fixed;
+  inset: 0;
+  background: #203f2c;
+  color: #f8f5e9;
+  font-family: "DM Sans", system-ui, sans-serif;
+  overflow: hidden;
+  font-size: 14px;
+  color-scheme: dark;
+}
+.grenland-app * {
+  box-sizing: border-box;
+}
+.grenland-app button,
+.grenland-app select,
+.grenland-app input {
+  font: inherit;
+}
+.grenland-app button,
+.grenland-app select {
+  cursor: pointer;
+}
+.grenland-app button {
+  border: 1px solid #ffffff29;
+  background: #193625ba;
+  color: #f7f4e7;
+  padding: 11px 17px;
+  border-radius: 8px;
+  transition:
+    background 0.2s,
+    transform 0.2s;
+  min-height: 44px;
+}
+.grenland-app button:hover {
+  background: #36593b;
+}
+.grenland-app button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.grenland-app button:focus-visible,
+.grenland-app input:focus-visible,
+.grenland-app select:focus-visible,
+.grenland-app a:focus-visible {
+  outline: 3px solid #f5d88e;
+  outline-offset: 3px;
+}
+.grenland-app a {
+  color: inherit;
+  text-decoration: none;
+}
+.course-viewport {
+  position: absolute;
+  inset: 0;
+}
+.course-topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 24px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(#112e29aa, transparent);
+  gap: 24px;
+  pointer-events: none;
+}
+.course-topbar > * {
+  pointer-events: auto;
+}
+.course-brand {
+  font-family: Manrope, sans-serif;
+  font-size: 25px;
+  font-weight: 800;
+  letter-spacing: -1px;
+}
+.course-brand span {
+  font-weight: 400;
+  color: #d6dfaa;
+}
+.course-brand small {
+  display: block;
+  font:
+    8px "DM Sans",
+    sans-serif;
+  letter-spacing: 2.5px;
+  margin-top: 6px;
+}
+.course-place {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.course-place strong {
+  font:
+    500 27px Manrope,
+    sans-serif;
+  letter-spacing: -1px;
+}
+.course-place > span:last-child {
+  font-size: 10px;
+  color: #e6ecd0;
+}
+.course-eyebrow {
+  font-size: 9px;
+  letter-spacing: 2px;
+  font-weight: 700;
+  color: #d5d9b6;
+}
+.course-topbar nav {
+  display: flex;
+  gap: 8px;
+}
+.course-topbar button {
+  backdrop-filter: blur(15px);
+}
+.course-hole-card {
+  position: absolute;
+  top: 138px;
+  left: 32px;
+  width: 218px;
+  padding: 23px;
+  background: #153523e6;
+  border: 1px solid #e5e8ba28;
+  border-radius: 13px;
+  backdrop-filter: blur(18px);
+  box-shadow: 0 12px 48px #102b2420;
+}
+.course-hole-card h1 {
+  font:
+    500 23px Manrope,
+    sans-serif;
+  letter-spacing: -1px;
+  margin: 12px 0 21px;
+}
+.course-hole-stats {
+  display: flex;
+  justify-content: space-between;
+  padding-bottom: 18px;
+  font-size: 9px;
+  gap: 8px;
+  border-bottom: 1px solid #c6d7b62a;
+}
+.course-hole-stats b {
+  font-size: 16px;
+  margin-left: 4px;
+}
+.course-hole-stats small {
+  font-size: 8px;
+  display: block;
+}
+.course-map {
+  width: 100%;
+  aspect-ratio: 1;
+  margin-top: 17px;
+  border-radius: 8px;
+}
+.course-map-caption {
+  display: flex;
+  justify-content: space-between;
+  font-size: 7px;
+  letter-spacing: 1px;
+  margin-top: 10px;
+  color: #b6c8a4;
+}
+.course-map-caption > span:last-child {
+  color: #e8a06e;
+}
+.course-distance {
+  position: absolute;
+  top: 146px;
+  right: 36px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-shadow: 0 2px 18px #173525;
+}
+.course-distance strong {
+  font:
+    500 54px Manrope,
+    sans-serif;
+  letter-spacing: -3px;
+  line-height: 1.5;
+}
+.course-distance strong small {
+  font:
+    400 19px "DM Sans",
+    sans-serif;
+  letter-spacing: 0;
+}
+.course-distance > span:last-child {
+  font-size: 12px;
+  text-transform: capitalize;
+}
+.course-travel {
+  position: absolute;
+  right: 32px;
+  top: 280px;
+  display: flex;
+  padding: 4px;
+  background: #183823d9;
+  border-radius: 10px;
+  backdrop-filter: blur(12px);
+}
+.course-travel button {
+  border: 0;
+  background: transparent;
+  font-size: 11px;
+  padding: 8px 12px;
+}
+.grenland-app .active {
+  background: #e4e9c3;
+  color: #203b26;
+}
+.course-shot-panel {
+  position: absolute;
+  bottom: 63px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(940px, calc(100% - 64px));
+  display: grid;
+  grid-template-columns: 1fr 1.15fr 1.15fr 1fr;
+  gap: 25px;
+  background: #142f22ee;
+  border: 1px solid #e5e8ba30;
+  border-radius: 16px;
+  padding: 25px 27px;
+  align-items: center;
+  box-shadow: 0 18px 80px #102b2433;
+  backdrop-filter: blur(24px);
+}
+.course-club {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.course-club select {
+  border: 0;
+  background: transparent;
+  color: #f5f0dc;
+  font:
+    500 23px Manrope,
+    sans-serif;
+  width: 100%;
+  outline-offset: 4px;
+}
+.course-club option {
+  background: #183b27;
+}
+.course-club small,
+.course-slider small {
+  font-size: 10px;
+  color: #acb89f;
+}
+.course-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+.course-slider > span {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: #b7c1a7;
+}
+.course-slider b {
+  color: #eee8cc;
+  font-size: 12px;
+  letter-spacing: 0;
+}
+.grenland-app input[type="range"] {
+  width: 100%;
+  accent-color: #e5cc85;
+  cursor: pointer;
+  height: 24px;
+}
+.grenland-app .course-primary {
+  background: #e7d49b;
+  color: #263526;
+  border: 0;
+  font-weight: 700;
+  border-radius: 9px;
+  padding: 16px 22px;
+}
+.grenland-app .course-primary:hover {
+  background: #f4e5b9;
+}
+.course-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
+  justify-content: center;
+  min-height: 80px;
+  font-size: 16px !important;
+}
+.course-hit small {
+  font-size: 8px;
+  font-weight: 500;
+  letter-spacing: 1px;
+  color: #536043;
+}
+.course-footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  padding: 16px 32px;
+  font-size: 9px;
+  letter-spacing: 0.4px;
+  background: linear-gradient(transparent, #102b2288);
+  color: #dce4c7;
+  gap: 12px;
+}
+.sim-active {
+  color: #e7d49b;
+}
+.course-status {
+  position: absolute;
+  left: 50%;
+  bottom: 205px;
+  transform: translateX(-50%);
+  background: #183a2bcf;
+  padding: 10px 20px;
+  border-radius: 24px;
+  font-size: 11px;
+}
+.course-result {
+  position: absolute;
+  left: 50%;
+  top: 36%;
+  transform: translate(-50%, -30%);
+  text-align: center;
+  background: #142f22ef;
+  border: 1px solid #d7dfaf42;
+  border-radius: 16px;
+  padding: 32px 42px;
+  box-shadow: 0 20px 80px #0e281b4f;
+}
+.course-result h2 {
+  font:
+    500 38px Manrope,
+    sans-serif;
+  margin: 13px 0;
+}
+.course-result p {
+  color: #becbae;
+  font-size: 12px;
+  margin-bottom: 24px;
+}
+.course-alert {
+  position: absolute;
+  left: 50%;
+  top: 120px;
+  transform: translateX(-50%);
+  background: #613b2ef2;
+  padding: 12px 20px;
+  border-radius: 10px;
+  z-index: 20;
+  max-width: 90vw;
+}
+.course-alert button {
+  padding: 0 8px;
+  margin-left: 12px;
+}
+.course-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(ellipse at top, #436342, #102b22);
+  gap: 16px;
+}
+.course-loading h1 {
+  font:
+    500 clamp(26px, 5vw, 52px) Manrope,
+    sans-serif;
+  letter-spacing: -2px;
+  text-align: center;
+}
+.course-movement-panel {
+  position: absolute;
+  bottom: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #123421e8;
+  padding: 18px 25px;
+  border-radius: 15px;
+  text-align: center;
+}
+.course-movement-panel > span {
+  display: block;
+  margin-bottom: 14px;
+  font-size: 12px;
+}
+.course-movement-panel > div {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.course-movement-panel > div button {
+  min-width: 62px;
+  min-height: 58px;
+  font-size: 22px;
+  touch-action: none;
+}
+.course-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: #0b231bac;
+  backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+  padding: 24px;
+}
+.course-modal {
+  position: relative;
+  background: #f2f1e7;
+  color: #293c2c;
+  border-radius: 20px;
+  width: min(800px, 100%);
+  max-height: 90dvh;
+  overflow: auto;
+  padding: 38px;
+  color-scheme: light;
+  box-shadow: 0 20px 100px #081b2260;
+}
+.course-modal-small {
+  width: min(560px, 100%);
+}
+.course-modal h2 {
+  font:
+    500 30px Manrope,
+    sans-serif;
+  letter-spacing: -1px;
+  margin: 12px 0 23px;
+}
+.course-modal p,
+.course-modal dd {
+  color: #63715e;
+  line-height: 1.7;
+  font-size: 13px;
+}
+.course-modal .course-eyebrow {
+  color: #708269;
+}
+.course-modal .course-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  border: 0;
+  background: #e3e7d8;
+  color: #304931;
+  padding: 5px 16px;
+  font-size: 24px;
+}
+.course-modal button {
+  background: #dfe5d4;
+  color: #2b462c;
+  border-color: #c7d1bc;
+}
+.course-modal label {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 20px 0;
+  font-size: 12px;
+}
+.course-modal select,
+.course-modal input:not([type="range"]) {
+  background: #fffef8;
+  border: 1px solid #ccd3c2;
+  border-radius: 8px;
+  padding: 12px;
+  color: #304931;
+  min-width: 0;
+  width: 100%;
+}
+.course-modal fieldset {
+  margin: 25px 0 0;
+  border: 1px solid #c9d2bd;
+  border-radius: 10px;
+  padding: 18px;
+}
+.course-modal legend {
+  font-size: 11px;
+  padding: 0 6px;
+}
+.course-modal small {
+  color: #71816a;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.course-modal dt {
+  font-weight: 700;
+  margin-top: 22px;
+}
+.course-modal dd {
+  margin: 7px 0;
+}
+.course-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0 22px;
+}
+.course-modal .active {
+  background: #284e34;
+  color: #f1f2df;
+}
+.course-score-grid {
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 8px;
+  margin: 24px 0;
+}
+.course-score-grid > div {
+  border: 1px solid #d2d9c7;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 13px 4px;
+  gap: 8px;
+}
+.course-score-grid .current {
+  background: #e0e8cf;
+  border-color: #74916a;
+}
+.course-score-grid span {
+  font-size: 10px;
+  color: #6b7e64;
+}
+.course-score-grid strong {
+  font-size: 24px;
+  font-weight: 500;
+}
+.course-score-grid small {
+  font-size: 8px;
+}
+.course-table-scroll {
+  overflow-x: auto;
+}
+.course-modal table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+  margin: 12px 0 24px;
+  white-space: nowrap;
+}
+.course-modal th,
+.course-modal td {
+  padding: 10px 9px;
+  text-align: left;
+  border-bottom: 1px solid #d3dbc9;
+}
+.course-modal th {
+  font-size: 10px;
+  color: #73816b;
+}
+.course-modal a {
+  text-decoration: underline;
+  font-size: 12px;
+}
+@media (max-width: 850px) {
+  .course-topbar {
+    padding: 18px;
+  }
+  .course-place {
+    display: none;
+  }
+  .course-hole-card {
+    top: 105px;
+    left: 18px;
+    width: 174px;
+    padding: 18px;
+  }
+  .course-hole-card h1 {
+    font-size: 18px;
+  }
+  .course-map {
+    max-height: 125px;
+  }
+  .course-distance {
+    top: 112px;
+    right: 20px;
+  }
+  .course-travel {
+    right: 18px;
+    top: 243px;
+  }
+  .course-shot-panel {
+    width: calc(100% - 36px);
+    gap: 16px;
+    padding: 20px;
+    grid-template-columns: 1fr 1fr;
+    bottom: 52px;
+  }
+  .course-hit {
+    min-height: 65px;
+  }
+  .course-footer {
+    padding: 15px 18px;
+  }
+  .course-footer > span:nth-child(2) {
+    display: none;
+  }
+  .course-status {
+    bottom: 275px;
+  }
+  .course-score-grid {
+    grid-template-columns: repeat(5, 1fr);
+  }
+}
+@media (max-width: 500px) {
+  .course-topbar {
+    padding: 14px;
+  }
+  .course-brand {
+    font-size: 20px;
+  }
+  .course-brand small {
+    font-size: 6px;
+  }
+  .course-topbar nav {
+    gap: 5px;
+  }
+  .course-topbar button {
+    padding: 7px 10px;
+    font-size: 10px;
+    min-height: 38px;
+  }
+  .course-hole-card {
+    top: 90px;
+    left: 14px;
+    width: 146px;
+    padding: 15px;
+  }
+  .course-hole-card h1 {
+    margin: 8px 0 13px;
+    font-size: 16px;
+  }
+  .course-hole-stats {
+    padding-bottom: 10px;
+    font-size: 8px;
+  }
+  .course-hole-stats b {
+    font-size: 12px;
+  }
+  .course-map {
+    max-height: 105px;
+    margin-top: 10px;
+  }
+  .course-map-caption {
+    font-size: 5px;
+  }
+  .course-distance {
+    right: 16px;
+    top: 97px;
+  }
+  .course-distance strong {
+    font-size: 40px;
+  }
+  .course-distance > span:last-child {
+    font-size: 10px;
+  }
+  .course-travel {
+    top: 213px;
+    right: 14px;
+    flex-direction: column;
+  }
+  .course-travel button {
+    min-height: 32px;
+    padding: 7px 12px;
+  }
+  .course-shot-panel {
+    bottom: 48px;
+    gap: 15px;
+    padding: 17px;
+    width: calc(100% - 28px);
+  }
+  .course-slider {
+    gap: 5px;
+  }
+  .course-club select {
+    font-size: 21px;
+  }
+  .course-slider small,
+  .course-club small {
+    font-size: 9px;
+  }
+  .course-footer {
+    font-size: 8px;
+    padding: 13px 14px;
+  }
+  .course-footer > span:last-child {
+    display: none;
+  }
+  .course-result {
+    width: calc(100% - 40px);
+    top: 42%;
+    padding: 25px;
+  }
+  .course-result h2 {
+    font-size: 30px;
+  }
+  .course-modal {
+    padding: 28px 20px;
+  }
+  .course-modal-backdrop {
+    padding: 12px;
+  }
+  .course-modal h2 {
+    font-size: 25px;
+  }
+  .course-modal fieldset {
+    padding: 12px;
+  }
+  .course-score-grid {
+    gap: 5px;
+  }
+  .course-eyebrow {
+    font-size: 8px;
+  }
+}
+@media (max-height: 650px) and (min-width: 600px) {
+  .course-topbar {
+    padding: 12px 22px;
+  }
+  .course-place strong {
+    font-size: 20px;
+  }
+  .course-hole-card {
+    top: 90px;
+    width: 165px;
+    padding: 15px;
+  }
+  .course-map {
+    max-height: 95px;
+  }
+  .course-hole-card h1 {
+    font-size: 18px;
+    margin: 8px 0 12px;
+  }
+  .course-hole-stats {
+    padding-bottom: 8px;
+  }
+  .course-distance {
+    top: 92px;
+  }
+  .course-travel {
+    top: 213px;
+  }
+  .course-shot-panel {
+    bottom: 40px;
+    padding: 16px 20px;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+  }
+  .course-status {
+    bottom: 160px;
+  }
+  .course-footer {
+    padding: 10px 22px;
+  }
+}
+
+.grenland-app .course-caddie {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 10px;
+  background: #314d32;
+  color: #dce4bf;
+  border-color: #b5c49333;
+  align-self: flex-start;
+}
+.course-caddie-note {
+  position: absolute;
+  bottom: 222px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: #f5eed3;
+  background: #173723e0;
+  padding: 9px 16px;
+  border-radius: 20px;
+  max-width: 90%;
+  text-align: center;
+}
+@media (max-width: 850px) {
+  .course-caddie-note {
+    bottom: 292px;
+  }
+}
+/* Golfer edition: keep the course visible while the shot is being prepared. */
+.course-topbar{padding:18px 28px}.course-place>span:last-child{opacity:.8}.course-hole-card{top:114px;width:190px;padding:18px;background:#102820d9}.course-hole-card h1{font-size:20px}.course-map{max-height:142px}.course-distance{top:240px}.course-round-badge{position:absolute;right:32px;top:115px;display:grid;grid-template-columns:auto auto;column-gap:20px;align-items:center;background:#132d25e8;border-left:3px solid #e0d294;padding:14px 20px;border-radius:4px}.course-round-badge span{font-size:9px;letter-spacing:2px;color:#cdd7c2}.course-round-badge strong{grid-row:span 2;font:500 38px Manrope,sans-serif}.course-round-badge small{font-size:9px;color:#dce2c8}.course-travel{top:375px}.course-view-tools{position:absolute;left:28px;bottom:235px;display:flex;gap:7px}.course-view-tools button{font-size:10px;padding:8px 12px;min-height:36px}.course-shot-panel{padding:16px 22px;gap:22px;grid-template-columns:.9fr 1fr 1fr 1.3fr;background:#10291ff0;bottom:44px}.swing-panel{min-width:0}.swing-top{display:flex;justify-content:space-between;font-size:9px;letter-spacing:1.2px;margin-bottom:8px}.swing-top b{color:#e7d49b;font-size:12px}.swing-meter{height:7px;background:#071711;border-radius:9px;overflow:hidden;position:relative}.swing-meter i{display:block;height:100%;background:linear-gradient(90deg,#6caf87,#e9d49a);transition:width .04s linear}.swing-meter em{position:absolute;left:92.5%;top:0;width:1px;height:100%;background:#fff7cc}.grenland-app .swing-pad{width:100%;min-height:85px;margin-top:10px;border:1px solid #c8d2a74d;background:linear-gradient(130deg,#e9dcae,#c6ba83);color:#203329;touch-action:none;user-select:none;display:flex;flex-direction:column;justify-content:center;gap:8px;text-align:center;padding:12px 7px;font-size:11px;font-weight:700;letter-spacing:.5px}.swing-pad small{font-size:8px;font-weight:500;letter-spacing:0;color:#3c5140}.swing-accuracy{height:8px;background:#4c4b36;margin-top:7px;position:relative;border-radius:6px}.swing-accuracy i{position:absolute;left:43%;width:14%;height:100%;background:#92bd7f}.swing-accuracy b{position:absolute;top:-3px;height:14px;width:3px;background:#fff7d5}.course-strike-feedback{position:absolute;left:50%;bottom:213px;transform:translateX(-50%);background:#142d22ed;padding:8px 16px;font-size:10px;letter-spacing:1px;border-radius:20px}.grenland-app .course-walk-next{display:block;margin:10px auto 0;background:transparent;border-color:#eef1dc55;color:#edf0df}.course-club small{line-height:1.4}.course-result{bottom:260px}.course-caddie-note{bottom:220px}
+@media(max-width:850px){.course-topbar{padding:14px}.course-hole-card{top:84px;left:14px;width:143px;padding:14px}.course-hole-card h1{font-size:16px}.course-map{max-height:86px}.course-round-badge{right:14px;top:84px;padding:9px 12px;column-gap:12px}.course-round-badge strong{font-size:27px}.course-round-badge span{font-size:7px}.course-round-badge small{font-size:7px}.course-distance{top:164px;right:15px}.course-distance strong{font-size:36px}.course-travel{top:249px;right:14px}.course-shot-panel{grid-template-columns:1fr 1.15fr;gap:12px 18px;bottom:35px;padding:16px;width:calc(100% - 28px)}.course-shot-panel>.course-club{grid-row:1}.course-shot-panel>.course-slider:nth-child(2){grid-row:1}.course-shot-panel>.course-slider:nth-child(3){grid-column:1;grid-row:2}.swing-panel{grid-column:2;grid-row:2}.grenland-app .swing-pad{min-height:72px;font-size:9px}.swing-pad small{font-size:7px}.course-view-tools{left:14px;bottom:305px;gap:5px}.course-view-tools button{font-size:8px;padding:7px 10px;min-height:32px}.course-strike-feedback,.course-caddie-note{bottom:278px;font-size:9px;max-width:90%}.course-result{bottom:335px;max-width:85%}}
+@media(max-height:650px) and (min-width:851px){.course-topbar{padding:10px 24px}.course-hole-card{top:85px;width:152px}.course-map{max-height:72px}.course-round-badge{top:85px}.course-distance{top:180px}.course-travel{top:285px}.course-shot-panel{bottom:31px;padding:12px 20px}.course-view-tools{bottom:190px}.course-strike-feedback,.course-caddie-note{bottom:186px}.course-result{bottom:200px}}
+@media(max-width:850px){
+ .course-topbar{padding-top:max(14px,env(safe-area-inset-top));gap:10px}
+ .course-shot-panel{padding:12px;gap:8px 14px;bottom:max(28px,env(safe-area-inset-bottom));}
+ .course-club{gap:5px}.course-club select{font-size:19px;padding:5px 0;min-height:36px}.course-club small{font-size:8px}.course-slider{gap:10px}.course-slider small{font-size:8px}
+ .grenland-app .swing-pad{min-height:63px;margin-top:7px}.course-view-tools{bottom:270px}.course-caddie-note{bottom:252px}.course-strike-feedback{bottom:284px}
+ .course-hole-card{width:130px;padding:11px}.course-hole-card h1{margin:8px 0 13px}.course-map{max-height:64px}.course-hole-stats{gap:8px}.course-travel{top:226px}.course-distance{top:149px}
+ .course-result{bottom:315px}.course-footer{padding-bottom:max(8px,env(safe-area-inset-bottom));}
+}
+@media(max-height:500px) and (orientation:landscape){
+ .course-topbar{padding:8px 14px}.course-brand{font-size:18px}.course-brand small,.course-place,.course-map,.course-map-caption,.course-hole-card .course-eyebrow{display:none}
+ .course-hole-card{top:61px;left:14px;padding:8px 12px;width:160px}.course-hole-card h1{font-size:15px;margin:0 0 9px}.course-round-badge{top:63px;right:14px;padding:8px 12px}.course-round-badge strong{font-size:25px}
+ .course-distance{top:130px;right:14px}.course-distance strong{font-size:27px}.course-distance>span{font-size:8px}.course-travel{top:61px;left:50%;right:auto;transform:translateX(-50%);flex-direction:row}.course-travel button{padding:5px 9px;min-height:32px;font-size:10px}
+ .course-shot-panel{grid-template-columns:.8fr 1fr 1fr 1.3fr;gap:12px;padding:9px 13px;bottom:21px;width:calc(100% - 28px)}.course-shot-panel>.course-club,.course-shot-panel>.course-slider:nth-child(2),.course-shot-panel>.course-slider:nth-child(3),.swing-panel{grid-row:auto;grid-column:auto}
+ .grenland-app .swing-pad{min-height:54px;font-size:8px}.swing-top{margin-bottom:4px}.course-club>span{font-size:7px}.course-club select{font-size:17px}.course-club small{display:none}.course-slider{gap:6px}.course-slider>span{font-size:7px}.course-slider small{font-size:7px}.course-view-tools{bottom:143px}.course-caddie-note{bottom:144px}.course-strike-feedback{display:none}.course-result{bottom:145px;padding:14px}.course-result h2{font-size:25px}.course-footer{font-size:7px;padding:5px 14px}.course-movement-panel{bottom:24px}
+}
