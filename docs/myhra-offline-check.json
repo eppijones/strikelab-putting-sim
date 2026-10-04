@@ -1,0 +1,6 @@
+{
+  "migrationFromPreviousRelease": true,
+  "offlineMyhra": true,
+  "offlineMapAndHoleNavigation": true,
+  "errors": []
+}

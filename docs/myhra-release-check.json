@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-04",
+  "scope": "Playable Myhra one-hole visual benchmark and full-course navigation",
+  "local_checks": {
+    "unit_tests": 34,
+    "typescript_build": "passed",
+    "new_component_lint": "passed",
+    "chrome_round": "completed in four strokes",
+    "webkit_touch_rotation_resume": "passed",
+    "keyboard_joystick_boost": "passed",
+    "simulated_standard_gamepad": "passed",
+    "hole_skip_and_return_saves": "passed",
+    "old_service_worker_migration_and_offline_navigation": "passed"
+  },
+  "features": [
+    "Textured golfer with authored IK swing and square club face behind the ball",
+    "Textured cart with transparent windscreen, circular drive stick and boost",
+    "Photo-informed open tee corridor, fairways, sand, green, pond and cart path",
+    "Daylight slider and automatic day progression",
+    "Compact caddie recommendation with optional explanation",
+    "Aim independent of camera orbit and explicit reset",
+    "Mouse, keyboard, touch timing and analog standard gamepad",
+    "Course overview and per-hole navigation without losing progress"
+  ],
+  "limits": [
+    "Only Myhra has the new visual treatment; other 17 holes remain the prior preview.",
+    "Physical iPhone and PS5 controller still need hands-on validation.",
+    "Swing uses authored inverse kinematics, not motion capture; external golf motion download requires the optional Adobe sign-in.",
+    "Course detail is a reference-informed approximation, not a surveyed reconstruction.",
+    "Existing simulator bridge remains in the full-course preview; live physical simulator integration has not been validated in Myhra."
+  ],
+  "credits": {
+    "tripo_existing_credits_spent": 365,
+    "last_verified_balance": 11445,
+    "purchases": 0
+  },
+  "hosted_verification": "pending deployment"
+}

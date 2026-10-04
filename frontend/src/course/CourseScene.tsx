@@ -8,7 +8,7 @@ import Golfer,{type Pose} from './Golfer';
 import type {SwingController} from './swing';
 
 export type TravelMode='golf'|'walk'|'cart';
-export interface Controls {forward:number;turn:number;gamepad:boolean}
+export interface Controls {forward:number;turn:number;boost?:boolean;gamepad:boolean}
 interface Props {course:Course;world:World;ball:Vec3;bearing:number;result?:ShotResult;motion:number;mode:TravelMode;input:React.RefObject<Controls>;onSettled:()=>void;onReady:()=>void;onTravelDistance:(metres:number)=>void;quality:'balanced'|'high';swing:React.RefObject<SwingController>;club:number;cameraMode:'player'|'scout';preview:Vec3;journey?:Vec3;showGrid:boolean}
 interface Runtime {animation:{motion:number;time:number;done:boolean;start:Vec3};traveler:{position:Vector3;heading:number}}
 
@@ -56,7 +56,7 @@ function GameView(props:Props&{runtimeRef:React.RefObject<Runtime>}){
    if(lastMode.current==='golf'){
     const start=journey&&lastJourney.current!==journey?journey:ball;t.position.set(...start);t.heading=distance(start,ball)>3?bearingTo(start,ball):bearing;lastJourney.current=journey;
    }
-   const speed=mode==='cart'?11:3.4;t.heading+=input.current.turn*dt*(mode==='cart'?1.2:1.8);
+   const speed=mode==='cart'?(input.current.boost?24:11):3.4;t.heading+=input.current.turn*dt*(mode==='cart'?1.2:1.8);
    const x=t.position.x+Math.sin(t.heading)*input.current.forward*dt*speed,z=t.position.z-Math.cos(t.heading)*input.current.forward*dt*speed,extent=(world.terrain.size-1)*world.terrain.spacing;
    if(x>2&&z>2&&x<extent-2&&z<extent-2){const y=heightAt(world,x,z);if(Math.abs(y-t.position.y)<1.5)t.position.set(x,y,z);}
    if(cart.current){cart.current.visible=mode==='cart';cart.current.position.copy(t.position);cart.current.rotation.y=-t.heading;}

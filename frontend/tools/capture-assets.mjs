@@ -1,0 +1,4 @@
+import {chromium} from 'playwright';
+const browser=await chromium.launch({channel:'chrome',headless:true}),page=await browser.newPage({viewport:{width:1000,height:900}});page.on('pageerror',e=>console.error(e));
+for(const spec of [['cart','ready','front'],['golfer','ready','front'],['golfer','power','front'],['golfer','power','side']]){await page.goto('http://127.0.0.1:5173/tools/asset-review.html?asset='+spec[0]+'&phase='+spec[1]+'&angle='+spec[2]);await page.waitForTimeout(2500);await page.screenshot({path:'../docs/review-'+spec.join('-')+'.png'});if(spec[0]==='golfer')console.log(spec.join(' '),await page.evaluate(()=>{const a=[];window.assetScene.traverse(o=>{if(o.isBone&&/Hips|Spine2|LeftArm|LeftForeArm|LeftHand$|RightArm|RightForeArm|RightHand$/.test(o.name))a.push([o.name,...o.matrixWorld.elements.slice(12,15)]);});return a;}));}
+await browser.close();

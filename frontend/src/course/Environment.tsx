@@ -1,3 +1,4 @@
+import {blocksTeeCorridor} from './teeClearance';
 import {memo,useEffect,useMemo,useRef} from 'react';
 import {useFrame} from '@react-three/fiber';
 import {useGLTF,useTexture} from '@react-three/drei';
@@ -70,7 +71,7 @@ export const Trees=memo(function Trees({course,world,anchor,quality}:{course:Cou
    for(let i=0;i<count;i++){
     const x=x0+random()*(x1-x0),z=z0+random()*(z1-z0),d=Math.hypot(x-anchor[0],z-anchor[2]);
     const s=.52+random()*.46,angle=random()*6.28;
-    if(d>850||!inPolygon(x,z,region.points)||course.practice.some(h=>Math.hypot(x-h.tee[0],z-h.tee[2])<13||Math.hypot(x-h.pin[0],z-h.pin[2])<14))continue;
+    if(d>850||!inPolygon(x,z,region.points)||course.practice.some(h=>blocksTeeCorridor(x,z,h)||Math.hypot(x-h.tee[0],z-h.tee[2])<13||Math.hypot(x-h.pin[0],z-h.pin[2])<14))continue;
     trees.push({x,z,y:heightAt(world,x,z),s,angle,d});
    }
   }

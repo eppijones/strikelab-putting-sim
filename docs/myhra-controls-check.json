@@ -1,0 +1,11 @@
+{
+  "url": "http://127.0.0.1:5173/play/grenland/myhra",
+  "normalKmh": 24,
+  "boostKmh": 71,
+  "joystick": true,
+  "aimCameraIndependent": true,
+  "keyboardSwing": true,
+  "standardGamepadSimulated": true,
+  "holeNavigationRetainsBothSaves": true,
+  "errors": []
+}

@@ -4,10 +4,11 @@ import './index.css'
 const App = lazy(() => import('./App.tsx'))
 
 const CourseApp = lazy(() => import('./course/CourseApp'));
+const MyhraApp = lazy(() => import('./myhra/MyhraApp'));
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <Suspense fallback={<div>Loading StrikeLab…</div>}>{location.pathname.startsWith('/play/grenland') ? <CourseApp /> : <App />}</Suspense>
+    <Suspense fallback={<div>Loading StrikeLab…</div>}>{location.pathname.startsWith('/play/grenland/myhra') ? <MyhraApp /> : location.pathname.startsWith('/play/grenland') ? <CourseApp /> : <App />}</Suspense>
   </StrictMode>,
 )
 

@@ -1,0 +1,79 @@
+{
+  "updated": "2026-10-04",
+  "scope": "Myhra single-hole visual benchmark",
+  "generated": [
+    {
+      "file": "golfer.glb",
+      "provider": "Tripo",
+      "model_id": "ed98fa9d-3d7f-43a3-8076-33d97c5f5617",
+      "work": "Generated golfer, retopology, Mixamo-style humanoid rig. Runtime swing is authored IK; generated motion attempts were not used."
+    },
+    {
+      "file": "cart.glb",
+      "provider": "Tripo",
+      "model_id": "4449af54-ee8d-49f8-b6ad-cb3977ca4cb5",
+      "work": "Generated and retopologized golf cart; windshield separated from opaque body and given a clear material."
+    },
+    {
+      "file": "birch.glb",
+      "provider": "Tripo",
+      "model_id": "3f74bb0f-c5a0-4b35-ad9e-ed988a68f7a3",
+      "work": "Generated and retopologized tree."
+    }
+  ],
+  "credit_ledger": {
+    "starting_balance": 11810,
+    "last_verified_balance": 11445,
+    "spent": 365,
+    "golfer_generation_retopology_rig": 115,
+    "three_unused_motion_attempts": 60,
+    "cart_generation_retopology": 95,
+    "birch_generation_retopology": 95,
+    "purchases": 0
+  },
+  "cc0": [
+    {
+      "file": "fir-atlas.webp",
+      "source": "https://polyhaven.com/a/fir_tree_01",
+      "work": "Four-view atlas baked from original full-detail tree, retaining twig alpha."
+    },
+    {
+      "file": "morning.hdr",
+      "source": "https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky"
+    },
+    {
+      "files": "grass_ground-diff.webp, grass_ground-nor_gl.webp",
+      "source": "https://polyhaven.com/a/grass_ground"
+    },
+    {
+      "files": "sand_02-diff.webp, sand_02-nor_gl.webp",
+      "source": "https://polyhaven.com/a/sand_02"
+    },
+    {
+      "files": "gravel_road-diff.webp, gravel_road-nor_gl.webp",
+      "source": "https://polyhaven.com/a/gravel_road"
+    }
+  ],
+  "course_references": [
+    {
+      "source": "https://grenlandgolf.no/nyheter/baneguide/",
+      "usage": "Reviewed official hole-one diagram, strategic description and linked drone film. Images and videos are references only; they are not bundled in this game."
+    },
+    {
+      "source": "https://grenlandgolf.no/GOGK/DroneVideo/Grenland%20Hull%201.mp4",
+      "usage": "Inspected tee at 9 seconds: open descending corridor, woods on right. Film date not established."
+    },
+    {
+      "source": "https://grenlandgolf.no/wp-content/uploads/2026/08/DJI_20260519185144_0023_D.jpg",
+      "usage": "Reviewed club course photograph, water and surrounding maintained grounds."
+    }
+  ],
+  "terrain": "Existing Kartverket-derived course dataset; see parent manifest for source attribution. Rotated/cropped with orientation preserved, with local tee, road and bunker surface dressing.",
+  "routing": "OpenStreetMap contributors, ODbL, https://www.openstreetmap.org/way/1364670544",
+  "limitations": [
+    "Pond shape and path are approximations informed by references, not a measured reconstruction.",
+    "The practice pin is synthetic.",
+    "Only Myhra receives this visual treatment. Other holes retain the earlier community course preview.",
+    "Physical iPhone and PS5 hardware still require hands-on testing; browser verification uses Chrome, WebKit and a simulated standard gamepad."
+  ]
+}

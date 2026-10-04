@@ -1,0 +1,10 @@
+{
+  "url": "http://127.0.0.1:5173/play/grenland/myhra",
+  "engine": "WebKit",
+  "touchTimingCompleted": true,
+  "strokes": 1,
+  "resume": true,
+  "rotation": true,
+  "dayControl": true,
+  "errors": []
+}

@@ -31,6 +31,8 @@ import {
 import { COURSE_ROOT, loadTile } from "./terrain";
 import type { Controls, TravelMode } from "./CourseScene";
 import "./course.css";
+import CourseMap,{HoleLinks} from "./CourseMap";
+import {DriveStick} from "./DriveStick";
 import { golfSound } from "./audio";
 import {useSwing} from "./useSwing";
 import SwingPanel from "./SwingPanel";
@@ -53,6 +55,13 @@ type LaunchEvent = {
   direction_frame: string;
   quality: { speed: string; direction: string; launch: string; spin: string };
 };
+
+function openingAim(course:Course, round:Round){
+  const hole=course.practice[round.hole],waypoint=hole.route?.[1];
+  if(!waypoint||round.strokes!==0||distance(round.ball,hole.tee)>2)return 0;
+  const delta=bearingTo(round.ball,[waypoint[0],round.ball[1],waypoint[1]])-bearingTo(round.ball,hole.pin);
+  return Math.atan2(Math.sin(delta),Math.cos(delta))*180/Math.PI;
+}
 
 const MiniMap=memo(function MiniMap({ course, round }: { course: Course; round: Round }) {
   const hole = course.practice[round.hole],
@@ -125,12 +134,14 @@ function Game({
   course,
   terrain,
   onCourseMode,
+  exploreHole,
 }: {
   course: Course;
+  exploreHole?:number;
   terrain: Tile;
   onCourseMode: (mode: "preview" | "practice") => void;
 }) {
-  const saveKey = course.mode === "preview" ? SAVE + ".preview" : SAVE;
+  const saveKey = exploreHole ? SAVE + ".explore." + exploreHole : course.mode === "preview" ? SAVE + ".preview" : SAVE;
   const [round, setRound] = useState<Round>(() => {
     try {
       return (
@@ -147,7 +158,7 @@ function Game({
   const sceneLoaded=useCallback(()=>setSceneReady(true),[]);
   const [club, setClub] = useState(()=>distance(round.ball,course.practice[round.hole].pin)<35?13:course.mode === "preview" ? 0 : 9),
     [power, setPower] = useState(()=>{const d=distance(round.ball,course.practice[round.hole].pin);return d<35?Math.max(1,Math.min(100,Math.round(Math.sqrt(2*9.81*.056*d)/CLUBS[13].speed*100))):90;}),
-    [aim, setAim] = useState(0);
+    [aim, setAim] = useState(()=>openingAim(course,round));
   const [stimp, setStimp] = useState(() => {
     try {
       const n = Number(JSON.parse(localStorage.getItem(PREFS) ?? "{}").stimp);
@@ -168,6 +179,9 @@ function Game({
   soundRef.current = sound;
   const [mode, setMode] = useState<TravelMode>("golf"),
     [quality, setQuality] = useState<"balanced" | "high">("balanced");
+  const [showMap,setShowMap]=useState(false),[boost,setBoost]=useState(false);
+  const boostRef=useRef(boost);useEffect(()=>{boostRef.current=boost;},[boost]);
+  const closeMap=useCallback(()=>setShowMap(false),[]);
   const [showScore, setShowScore] = useState(false),
     [showHelp, setShowHelp] = useState(false),
     [showSettings, setShowSettings] = useState(false);
@@ -229,7 +243,7 @@ function Game({
       power,
       mode,
       detailReady,
-      modal: showScore || showHelp || showSettings,
+      modal: showScore || showHelp || showSettings || showMap,
     };
   });
   const persist = useCallback(
@@ -309,7 +323,7 @@ function Game({
     },
     [persist],
   );
-  const swing=useSwing((strike)=>takeShot(undefined,strike),detailReady&&!busy&&!round.complete&&round.scores[round.hole]===null&&mode==="golf"&&!showHelp&&!showScore&&!showSettings,swingMode);
+  const swing=useSwing((strike)=>takeShot(undefined,strike),detailReady&&!busy&&!round.complete&&round.scores[round.hole]===null&&mode==="golf"&&!showHelp&&!showScore&&!showSettings&&!showMap,swingMode);
   const swingAPI=useRef(swing);swingAPI.current=swing;
   const settled = useCallback(() => {
     swingAPI.current.reset();
@@ -345,7 +359,7 @@ function Game({
       swingAPI.current.reset();
       setCameraMode("player");
       setAnimation(undefined);
-      setAim(0);
+      setAim(openingAim(course,next));
       setPower(90);
       setClub(
         course.mode === "preview"
@@ -367,6 +381,7 @@ function Game({
         setShowScore(false);
         setShowSettings(false);
         setShowHelp(false);
+        setShowMap(false);
         return;
       }
       if (latest.current.modal) return;
@@ -473,7 +488,11 @@ function Game({
         Number(keys.has("KeyD")) -
         Number(keys.has("KeyA")) +
         horizontal;
+      controls.current.forward=Math.max(-1,Math.min(1,controls.current.forward));
+      controls.current.turn=Math.max(-1,Math.min(1,controls.current.turn));
+      controls.current.boost=boostRef.current||keys.has('ShiftLeft')||keys.has('ShiftRight')||!!buttons[7];
       if (latest.current.modal) {
+        controls.current.boost=false;
         controls.current.forward = 0;
         controls.current.turn = 0;
       }
@@ -685,7 +704,7 @@ function Game({
       setCameraMode('player');
       setClub(kind === "putt" ? 13 : kind === "full" ? 0 : 9);
       setPower(kind==='putt'?Math.round(Math.sqrt(2*9.81*.56/stimp*4)/CLUBS[13].speed*100):90);
-      setAim(0);
+      setAim(kind === "full" ? openingAim(course,{...round,ball,strokes:0}) : 0);
       setShowSettings(false);
     }
   };
@@ -728,7 +747,7 @@ function Game({
   const holeComplete = round.scores[round.hole] !== null;
   const bearing = bearingTo(round.ball, hole.pin) + (aim * Math.PI) / 180;
   const canShoot =
-    detailReady && !busy && !round.complete && !holeComplete && mode === "golf";
+    detailReady && !busy && !round.complete && !holeComplete && mode === "golf" && !showMap && !showHelp && !showScore && !showSettings;
   const preview=useMemo(()=>{try{return simulate(world,round.ball,{speed:CLUBS[club].speed*power/100,bearing,launch:CLUBS[club].loft,spin:CLUBS[club].spin}).end;}catch{return round.ball;}},[world,round.ball,club,power,bearing]);
   const relativeScore=total-playedPar;
   return (
@@ -762,6 +781,7 @@ function Game({
         </ErrorBoundary>
         {!sceneReady&&<div className="course-preparing" role="status">Preparing golfer and course…</div>}
       </div>
+      {showMap&&<CourseMap current={exploreHole??round.hole+1} onClose={closeMap}/>}
       <header className="course-topbar">
         <a className="course-brand" href="/play/grenland">
           STRIKE<span>LAB</span>
@@ -776,7 +796,7 @@ function Game({
               : "Terrain practice · routing under review"}
           </span>
         </div>
-        <nav aria-label="Course tools">
+        <nav aria-label="Course tools"><button disabled={busy} onClick={()=>setShowMap(true)}>Course map</button>
           <button
             onClick={() => setShowHelp(true)}
             aria-label="Controls and help"
@@ -797,10 +817,10 @@ function Game({
       <section className="course-hole-card">
         <span className="course-eyebrow">
           {round.complete
-            ? "ROUND COMPLETE"
-            : `${course.mode === "preview" ? "HOLE" : "PRACTICE"} ${String(round.hole + 1).padStart(2, "0")} / ${course.practice.length}`}
+            ? exploreHole?"HOLE COMPLETE":"ROUND COMPLETE"
+            : `${course.mode === "preview" ? "HOLE" : "PRACTICE"} ${String(exploreHole??round.hole + 1).padStart(2, "0")} / ${exploreHole?18:course.practice.length}`}
         </span>
-        <h1>{hole.name}</h1>
+        <h1>{hole.name}</h1><HoleLinks current={exploreHole??round.hole+1}/>
         <div className="course-hole-stats">
           <span>
             PAR <b>{hole.par}</b>
@@ -862,11 +882,11 @@ function Game({
       {holeComplete && !busy && (
         <section className="course-result" aria-live="polite">
           <span className="course-eyebrow">
-            {round.complete ? "ALL GREENS COMPLETED" : "IN THE CUP"}
+            {round.complete ? exploreHole?"HOLE COMPLETE":"ALL GREENS COMPLETED" : "IN THE CUP"}
           </span>
           <h2>
             {round.complete
-              ? "Round complete"
+              ? exploreHole?scoreName(round.strokes,hole.par):"Round complete"
               : scoreName(round.strokes, hole.par)}
           </h2>
           <p>
@@ -957,31 +977,8 @@ function Game({
             {mode === "walk" ? "Explore on foot" : "Explore by cart"} · WASD /
             left stick · {Math.round(travelDistance)} m to next shot
           </span>
-          <div>
-            {[
-              { label: "↶", axis: "turn", value: -1 },
-              { label: "↑", axis: "forward", value: 1 },
-              { label: "↓", axis: "forward", value: -1 },
-              { label: "↷", axis: "turn", value: 1 },
-            ].map((c) => (
-              <button
-                key={c.label}
-                aria-label={`${c.axis} ${c.value}`}
-                onPointerDown={(e) => {
-                  e.currentTarget.setPointerCapture(e.pointerId);
-                  touch.current[c.axis as "turn" | "forward"] = c.value;
-                }}
-                onPointerUp={() => {
-                  touch.current[c.axis as "turn" | "forward"] = 0;
-                }}
-                onPointerCancel={() => {
-                  touch.current[c.axis as "turn" | "forward"] = 0;
-                }}
-              >
-                {c.label}
-              </button>
-            ))}
-          </div>
+          <DriveStick disabled={showMap||showHelp||showScore||showSettings} onMove={axes=>{touch.current=axes;}}/>
+          {mode==='cart'&&<button className="drive-boost" aria-label="Toggle boost" aria-pressed={boost} onClick={()=>setBoost(v=>!v)}>⚡ Boost {boost?'on':'off'} · Shift / R2</button>}
           <button onClick={() => setMode("golf")}>Return to ball</button>
         </section>
       )}
@@ -1073,7 +1070,7 @@ function Game({
                     if (persist(next)) {
                       setAnimation(undefined);
                       setShowScore(false);
-                      setAim(0);
+                      setAim(openingAim(course,next));
                       setPower(90);
                       setClub(course.mode === "preview" ? 0 : 9);
                     }
@@ -1350,6 +1347,8 @@ function Game({
 }
 
 export default function CourseApp() {
+  const requested=Number(new URLSearchParams(location.search).get('hole'));
+  const exploreHole=Number.isInteger(requested)&&requested>=1&&requested<=18?requested:undefined;
   const [data, setData] = useState<{
       course: Course;
       terrain: Tile;
@@ -1379,16 +1378,16 @@ export default function CourseApp() {
       data
         ? {
             ...data.course,
-            mode: courseMode,
+            mode: exploreHole?"preview" as const:courseMode,
             practice:
-              courseMode === "preview" ? data.preview : data.course.practice,
-            revision:
+              exploreHole?[data.preview[exploreHole-1]]:courseMode === "preview" ? data.preview : data.course.practice,
+            revision: exploreHole?`${data.previewRevision}-explore-${exploreHole}`:
               courseMode === "preview"
                 ? data.previewRevision
                 : data.course.revision,
           }
         : undefined,
-    [data, courseMode],
+    [data, courseMode, exploreHole],
   );
   useEffect(() => {
     const controller = new AbortController();
@@ -1422,7 +1421,8 @@ export default function CourseApp() {
   }, []);
   return data && activeCourse ? (
     <Game
-      key={courseMode}
+      key={`${courseMode}-${exploreHole??"round"}`}
+      exploreHole={exploreHole}
       course={activeCourse}
       terrain={data.terrain}
       onCourseMode={changeCourse}

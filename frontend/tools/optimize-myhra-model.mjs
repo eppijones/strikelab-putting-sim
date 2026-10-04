@@ -1,0 +1,11 @@
+import {NodeIO} from '@gltf-transform/core';
+import {ALL_EXTENSIONS} from '@gltf-transform/extensions';
+import {dedup,prune,textureCompress,resample} from '@gltf-transform/functions';
+import sharp from 'sharp';
+const [input,output]=process.argv.slice(2);
+if(!input||!output)throw new Error('Usage: node tools/optimize-myhra-model.mjs input.glb output.glb');
+const io=new NodeIO().registerExtensions(ALL_EXTENSIONS);
+const document=await io.read(input);
+await document.transform(dedup(),prune(),resample(),textureCompress({encoder:sharp,targetFormat:'webp',resize:[2048,2048],quality:90}));
+await io.write(output,document);
+console.log(JSON.stringify({output,animations:document.getRoot().listAnimations().map(a=>a.getName()),materials:document.getRoot().listMaterials().length}));

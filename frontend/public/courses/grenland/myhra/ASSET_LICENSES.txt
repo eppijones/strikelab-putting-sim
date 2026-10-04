@@ -1,0 +1,16 @@
+MYHRA ASSET ATTRIBUTION
+
+Terrain: existing Grenland Kartverket-derived source; see parent course manifest.
+Routing: OpenStreetMap contributors, ODbL. https://www.openstreetmap.org/copyright
+
+Tree atlas, sky HDR and grass / sand / gravel textures: Poly Haven, CC0.
+https://polyhaven.com/license
+Asset-specific links and transformations are recorded in sources.json.
+
+Golfer, cart and birch: generated in the project owner's Tripo account.
+These are generated assets, not CC0 Poly Haven assets. Retopologized and
+compressed for this game. Club meshes and runtime IK animation are authored
+project code. No Mixamo motion-capture downloads are included.
+
+Grenland course diagrams and drone imagery were reviewed as references only.
+No club photographs or videos are redistributed in this directory.
