@@ -14,3 +14,19 @@ project code. No Mixamo motion-capture downloads are included.
 
 Grenland course diagrams and drone imagery were reviewed as references only.
 No club photographs or videos are redistributed in this directory.
+
+REBUILD DERIVATIVES (5 October 2026)
+
+Near fir meshes and mobile HDR remain Poly Haven CC0 derivatives.
+Mobile golfer/cart/birch variants retain their generated-source rights.
+The logged-in project account showed Pro; Tripo paid-user modification and
+commercial distribution guidance was reviewed at:
+https://www.tripo3d.ai/help/privacy-policy/how-to-use-tripo-models-commercially
+
+GolfGrip and GolfDriver/GolfIron/GolfChip/GolfPutt were authored in Blender
+for this project. Editable Blender sources and build scripts are included.
+They are not redistributed third-party mocap or claims of coach-approved
+professional technique. No new Tripo generation credits were spent.
+
+Bunker basin/lip heights are authored approximations, with the original
+height datasets retained. See sources.json and hole.json surfaceAuthorship.

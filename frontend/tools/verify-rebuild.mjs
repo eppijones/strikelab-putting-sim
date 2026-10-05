@@ -1,0 +1,38 @@
+import {chromium} from 'playwright';
+import {mkdir,writeFile} from 'node:fs/promises';
+import assert from 'node:assert/strict';
+const url=process.env.GRENLAND_TEST_URL??'http://127.0.0.1:5175/play/grenland/myhra',out='../docs/rebuild';
+await mkdir(out,{recursive:true});
+const browser=await chromium.launch({channel:'chrome'}),context=await browser.newContext({viewport:{width:393,height:852},deviceScaleFactor:3,isMobile:true,hasTouch:true});
+const page=await context.newPage(),cdp=await context.newCDPSession(page),errors=[],checks=[];
+page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
+const check=(name,detail)=>{checks.push({name,passed:true,detail});console.log('PASS',name,detail??'');};
+const ready=()=>page.waitForFunction(()=>document.querySelector('.mh-swing-pad')?.disabled===false,null,{timeout:60000});
+const saved=()=>page.evaluate(()=>JSON.parse(localStorage.getItem('strikelab.myhra.hole.v3')??'null'));
+const touch=async(type,x,y,id=1)=>cdp.send('Input.dispatchTouchEvent',{type,touchPoints:type==='touchEnd'||type==='touchCancel'?[]:[{x,y,id,radiusX:4,radiusY:4,force:1}]});
+async function stroke(power){const r=await page.locator('.mh-swing-pad').boundingBox(),x=r.x+r.width/2,y=r.y+r.height*.25;await touch('touchStart',x,y);for(let i=1;i<=8;i++){await touch('touchMove',x,y+96*power*i/8);await page.waitForTimeout(18);}await touch('touchEnd',x,y+96*power);}
+try{
+ await page.goto(url);await ready();await page.waitForTimeout(2200);await page.screenshot({path:out+'/mobile-tee.png'});
+ check('mobile scene loads without runtime errors');
+ const before=await saved();await stroke(.67);await page.waitForFunction(()=>JSON.parse(localStorage.getItem('strikelab.myhra.hole.v3')??'null')?.strokes>0);
+ const first=await saved();assert.equal(first.strokes,1);assert.ok(Math.abs(first.history[0].launch.power-.67)<.011);assert.equal(first.history[0].launch.source,'touch');check('default touch release accepts one absolute-strength shot',first.history[0].launch.power);
+ await page.reload();await ready();assert.equal((await saved()).strokes,1);check('reload during flight preserves one accepted shot');
+ // A cancellation gesture must leave the accepted round unchanged.
+ const r=await page.locator('.mh-swing-pad').boundingBox(),x=r.x+r.width*.5,y=r.y+r.height*.25;
+ await touch('touchStart',x,y);await touch('touchMove',x,y+40);await touch('touchMove',x-145,y+40);await touch('touchEnd',x-145,y+40);await page.waitForTimeout(200);assert.equal((await saved()).strokes,1);check('visible cancellation zone does not add a stroke');
+ await touch('touchStart',x,y);await touch('touchMove',x,y+50);await touch('touchCancel',x,y+50);await page.waitForTimeout(200);assert.equal((await saved()).strokes,1);check('pointer cancellation leaves controls usable');
+ await page.getByRole('button',{name:'Menu',exact:true}).click();await page.getByRole('button',{name:/Putting · 4 m/}).click();await ready();await page.waitForTimeout(1000);await page.screenshot({path:out+'/mobile-putting.png'});
+ assert.ok(await page.getByRole('combobox',{name:'Putting range'}).count());await stroke(.3);await page.waitForTimeout(1000);assert.equal((await saved()).strokes,1);check('putting practice preserves the unfinished round');
+ await page.getByRole('button',{name:'Return to round',exact:false}).waitFor();await page.waitForFunction(()=>document.querySelector('.mh-session-banner button')?.disabled===false,null,{timeout:30000});await page.getByRole('button',{name:'Return to round',exact:false}).click();await ready();assert.deepEqual((await saved()).ball,first.ball);check('return from practice restores saved ball');
+ await page.getByRole('button',{name:'Drive the cart',exact:true}).click();await page.waitForTimeout(1000);await page.keyboard.down('KeyW');await page.waitForTimeout(2400);await page.keyboard.up('KeyW');const speed=Number(await page.getByLabel('Cart speed',{exact:true}).innerText());assert.ok(speed>5&&speed<=24);await page.screenshot({path:out+'/mobile-cart.png'});await page.waitForTimeout(2200);assert.ok(Number(await page.getByLabel('Cart speed',{exact:true}).innerText())<2);check('cart accelerates and brakes with keyboard',speed+' km/h');await page.getByRole('button',{name:'Back to my ball',exact:false}).click();
+ await page.setViewportSize({width:852,height:393});await ready();await page.waitForTimeout(1200);await page.screenshot({path:out+'/mobile-landscape.png'});assert.equal((await saved()).strokes,1);check('rotation retains the round and responsive controls');
+ await page.setViewportSize({width:393,height:852});await page.getByRole('button',{name:'Round journal',exact:true}).click();await page.getByRole('button',{name:'Myhra replay',exact:true}).click();await page.getByRole('button',{name:'+ Shot',exact:true}).click();await page.getByRole('button',{name:'Use preview tee',exact:true}).click();await page.getByRole('combobox',{name:'Recorded club'}).selectOption('7 iron');await page.getByRole('button',{name:'Place finish',exact:true}).click();
+ await page.locator('.gj-map').scrollIntoViewIfNeeded();const location=await page.locator('.gj-map').evaluate(svg=>{const p=svg.createSVGPoint();p.x=367;p.y=390;const v=p.matrixTransform(svg.getScreenCTM());return{x:v.x,y:v.y};});await page.mouse.click(location.x,location.y);
+ await page.getByRole('button',{name:'+ Penalty',exact:true}).click();await page.getByRole('combobox',{name:'Select replay shot'}).selectOption({index:0});
+ const journal=await page.evaluate(()=>JSON.parse(localStorage.getItem('strikelab.grenland.journal.v1')));assert.equal(journal.rounds[0].reportedTotal,77);assert.equal(journal.rounds[0].myhraShots.length,2);const original=JSON.stringify(journal.rounds[0]);
+ await page.getByRole('button',{name:'Watch in 3D',exact:false}).click();await page.waitForTimeout(1300);await page.getByRole('button',{name:'Pause illustrative replay',exact:true}).click();await page.screenshot({path:out+'/mobile-3d-replay.png'});assert.ok(await page.getByRole('dialog',{name:'Illustrative 3D replay'}).isVisible());assert.equal((await saved()).strokes,1);check('manual replay runs in 3D without scoring');
+ await page.getByLabel('Replay progress',{exact:true}).fill('750');await page.getByRole('button',{name:'Back to map',exact:true}).click();await page.getByRole('button',{name:'Try a different shot in 3D',exact:false}).click();await ready();await stroke(.65);await page.waitForTimeout(300);const alternative=await page.evaluate(()=>JSON.parse(localStorage.getItem('strikelab.grenland.journal.v1')));assert.equal(JSON.stringify(alternative.rounds[0]),original);assert.equal(alternative.scenarios.length,1);assert.equal((await saved()).strokes,1);check('what-if outcome is separate from historical and active rounds');
+ await page.reload();await ready();await page.getByRole('button',{name:'Round journal',exact:true}).click();const after=await page.evaluate(()=>JSON.parse(localStorage.getItem('strikelab.grenland.journal.v1')));assert.equal(after.rounds[0].myhraShots.length,2);assert.equal(after.scenarios.length,1);check('journal and scenario survive reload');
+ assert.deepEqual(errors,[]);check('no browser console errors');
+}catch(error){checks.push({name:'Browser flow',passed:false,detail:String(error)});console.error(error);await page.screenshot({path:out+'/flow-failure.png'}).catch(()=>{});process.exitCode=1;}
+finally{await writeFile(out+'/browser-flow.json',JSON.stringify({url,kind:'Chrome headless with emulated touch and viewport; not physical iPhone or controller',checks,errors},null,2));await browser.close();}

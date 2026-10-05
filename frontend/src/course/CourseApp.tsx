@@ -290,7 +290,7 @@ function Game({
       const shot = {
         speed: event?.speed_m_s ?? (CLUBS[l.club].speed * l.power) / 100*(strike?.power??1)*(strike?.contact??1),
         bearing: bearingTo(r.ball, l.world.pin) + (relative * Math.PI) / 180,
-        launch: event?.launch_angle_deg ?? (event ? 0 : CLUBS[l.club].loft),
+        launch: event?.launch_angle_deg ?? (event ? 0 : CLUBS[l.club].launch ?? CLUBS[l.club].loft),
         spin: event?.spin_rpm ?? (event ? 0 : CLUBS[l.club].spin),
       };
       try {
@@ -375,7 +375,6 @@ function Game({
     let raf = 0,
       last = performance.now();
     let oldButtons: boolean[] = [];
-    let padSwing = false;
     const onDown = (event: KeyboardEvent) => {
       if (event.code === "Escape") {
         setShowScore(false);
@@ -415,7 +414,6 @@ function Game({
     const onUp = (event: KeyboardEvent) => keys.delete(event.code);
     const clear = () => {
       swingAPI.current.reset();
-      padSwing = false;
       keys.clear();
       touch.current = { forward: 0, turn: 0 };
       controls.current.forward = 0;
@@ -435,13 +433,8 @@ function Game({
       }
       const pressed = (i: number) => buttons[i] && !oldButtons[i];
       if (pressed(0)) swingAPI.current.press();
-      const pull=gamepad?.axes[3]??0;
-      if(gamepad&&!latest.current.modal&&latest.current.mode==="golf"){
-        if(pull>.15&&swingAPI.current.controller.current.phase==="ready"){swingAPI.current.begin();padSwing=true;}
-        if(padSwing&&["backswing","downswing"].includes(swingAPI.current.controller.current.phase))swingAPI.current.move(Math.max(0,pull),gamepad.axes[2]??0);
-        else padSwing=false;
-      }else if(padSwing){swingAPI.current.reset();padSwing=false;
-      }
+      swingAPI.current.controllerMove(gamepad?.axes[3]??0,gamepad?.axes[2]??0,
+        !!gamepad&&!latest.current.modal&&latest.current.mode==="golf");
       if(pressed(2))setCameraMode(v=>v==="player"?"scout":"player");
       if (pressed(1)) {
         if (latest.current.modal) {
@@ -748,7 +741,7 @@ function Game({
   const bearing = bearingTo(round.ball, hole.pin) + (aim * Math.PI) / 180;
   const canShoot =
     detailReady && !busy && !round.complete && !holeComplete && mode === "golf" && !showMap && !showHelp && !showScore && !showSettings;
-  const preview=useMemo(()=>{try{return simulate(world,round.ball,{speed:CLUBS[club].speed*power/100,bearing,launch:CLUBS[club].loft,spin:CLUBS[club].spin}).end;}catch{return round.ball;}},[world,round.ball,club,power,bearing]);
+  const preview=useMemo(()=>{try{return simulate(world,round.ball,{speed:CLUBS[club].speed*power/100,bearing,launch:CLUBS[club].launch??CLUBS[club].loft,spin:CLUBS[club].spin}).end;}catch{return round.ball;}},[world,round.ball,club,power,bearing]);
   const relativeScore=total-playedPar;
   return (
     <main className="grenland-app">
@@ -920,7 +913,7 @@ function Game({
               ))}
             </select>
             <small>
-              {CLUBS[club].loft}° launch ·{" "}
+              {CLUBS[club].launch??CLUBS[club].loft}° launch ·{" "}
               {CLUBS[club].name === "Putter"
                 ? "Feel the green"
                 : "Play your line"}
@@ -1143,7 +1136,7 @@ function Game({
             <dl>
               <dt>Mouse & keyboard</dt>
               <dd>
-                Drag the view to look, scroll to zoom. Drag down then up on the swing pad to hit. Space uses three-click timing. Arrow keys adjust aim and target power. V scouts the landing area; G toggles the green grid.
+                Drag the view to look, scroll to zoom. Touch: pull down on the swing pad and release. Mouse or controller: pull back then forward through the start. Space uses three clicks: start, power, accuracy. Arrow keys adjust aim and target power. V scouts the landing area; G toggles the green grid.
                 C changes club, N advances after holing out. WASD
                 moves in walk/cart mode.
               </dd>

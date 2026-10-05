@@ -1,0 +1,250 @@
+{
+  "source": "Existing Tripo-generated golfer; source rights recorded in sources.json",
+  "blender": "5.2.2 LTS",
+  "action": "GolfGrip",
+  "method": "Anatomical finger curl axes derived from each hand's index/pinky bases, not a shared arbitrary local axis",
+  "bones": {
+    "mixamorig:LeftHandIndex1": {
+      "axis": [
+        0.9749168753623962,
+        -0.14842119812965393,
+        0.16585706174373627
+      ],
+      "curl_radians": -0.85
+    },
+    "mixamorig:LeftHandIndex2": {
+      "axis": [
+        0.9832074046134949,
+        -0.14810147881507874,
+        0.10662813484668732
+      ],
+      "curl_radians": -1.4
+    },
+    "mixamorig:LeftHandIndex3": {
+      "axis": [
+        0.9832074046134949,
+        -0.14810135960578918,
+        0.10662807524204254
+      ],
+      "curl_radians": -0.65
+    },
+    "mixamorig:LeftHandMiddle1": {
+      "axis": [
+        0.969443142414093,
+        -0.17557281255722046,
+        0.17133116722106934
+      ],
+      "curl_radians": -0.85
+    },
+    "mixamorig:LeftHandMiddle2": {
+      "axis": [
+        0.9813505411148071,
+        -0.1629713475704193,
+        0.10193966329097748
+      ],
+      "curl_radians": -1.4
+    },
+    "mixamorig:LeftHandMiddle3": {
+      "axis": [
+        0.9813505411148071,
+        -0.16297176480293274,
+        0.10193905234336853
+      ],
+      "curl_radians": -0.65
+    },
+    "mixamorig:LeftHandRing1": {
+      "axis": [
+        0.9641057848930359,
+        -0.21431033313274384,
+        0.15675413608551025
+      ],
+      "curl_radians": -0.85
+    },
+    "mixamorig:LeftHandRing2": {
+      "axis": [
+        0.9772717952728271,
+        -0.18458512425422668,
+        0.1042545735836029
+      ],
+      "curl_radians": -1.4
+    },
+    "mixamorig:LeftHandRing3": {
+      "axis": [
+        0.9772717952728271,
+        -0.18458503484725952,
+        0.1042543575167656
+      ],
+      "curl_radians": -0.65
+    },
+    "mixamorig:LeftHandPinky1": {
+      "axis": [
+        0.9404271841049194,
+        -0.31108272075653076,
+        0.1372033804655075
+      ],
+      "curl_radians": -0.85
+    },
+    "mixamorig:LeftHandPinky2": {
+      "axis": [
+        0.9543725848197937,
+        -0.28179994225502014,
+        0.09880395978689194
+      ],
+      "curl_radians": -1.4
+    },
+    "mixamorig:LeftHandPinky3": {
+      "axis": [
+        0.9543726444244385,
+        -0.28179967403411865,
+        0.09880442172288895
+      ],
+      "curl_radians": -0.65
+    },
+    "mixamorig:LeftHandThumb1": {
+      "axis": [
+        -0.07079675048589706,
+        -0.28612738847732544,
+        0.9555726051330566
+      ],
+      "curl_radians": -0.8
+    },
+    "mixamorig:LeftHandThumb2": {
+      "axis": [
+        0.9351915717124939,
+        0.29643967747688293,
+        0.19375425577163696
+      ],
+      "curl_radians": -0.45
+    },
+    "mixamorig:LeftHandThumb3": {
+      "axis": [
+        0.9351915121078491,
+        0.2964397668838501,
+        0.19375447928905487
+      ],
+      "curl_radians": -0.25
+    },
+    "mixamorig:RightHandIndex1": {
+      "axis": [
+        0.9313287734985352,
+        -0.19293805956840515,
+        0.30887269973754883
+      ],
+      "curl_radians": -0.85
+    },
+    "mixamorig:RightHandIndex2": {
+      "axis": [
+        0.8890430927276611,
+        -0.15628531575202942,
+        0.4303232729434967
+      ],
+      "curl_radians": -1.4
+    },
+    "mixamorig:RightHandIndex3": {
+      "axis": [
+        0.8890438675880432,
+        -0.1562851220369339,
+        0.43032151460647583
+      ],
+      "curl_radians": -0.65
+    },
+    "mixamorig:RightHandMiddle1": {
+      "axis": [
+        -0.20651093125343323,
+        -0.12913201749324799,
+        0.9698858857154846
+      ],
+      "curl_radians": -0.85
+    },
+    "mixamorig:RightHandMiddle2": {
+      "axis": [
+        0.9078109860420227,
+        -0.16547662019729614,
+        0.38535305857658386
+      ],
+      "curl_radians": -1.4
+    },
+    "mixamorig:RightHandMiddle3": {
+      "axis": [
+        0.9078109860420227,
+        -0.16547662019729614,
+        0.3853532075881958
+      ],
+      "curl_radians": -0.65
+    },
+    "mixamorig:RightHandRing1": {
+      "axis": [
+        -0.9540416598320007,
+        -0.23018907010555267,
+        0.19188006222248077
+      ],
+      "curl_radians": -0.85
+    },
+    "mixamorig:RightHandRing2": {
+      "axis": [
+        0.9473989605903625,
+        -0.18971630930900574,
+        0.25776615738868713
+      ],
+      "curl_radians": -1.4
+    },
+    "mixamorig:RightHandRing3": {
+      "axis": [
+        0.9473986029624939,
+        -0.1897166669368744,
+        0.2577674686908722
+      ],
+      "curl_radians": -0.65
+    },
+    "mixamorig:RightHandPinky1": {
+      "axis": [
+        0.8200109004974365,
+        -0.2579305171966553,
+        -0.5109348893165588
+      ],
+      "curl_radians": -0.85
+    },
+    "mixamorig:RightHandPinky2": {
+      "axis": [
+        0.9605761766433716,
+        -0.2515398859977722,
+        -0.11841282248497009
+      ],
+      "curl_radians": -1.4
+    },
+    "mixamorig:RightHandPinky3": {
+      "axis": [
+        0.9605762958526611,
+        -0.25154027342796326,
+        -0.11841108649969101
+      ],
+      "curl_radians": -0.65
+    },
+    "mixamorig:RightHandThumb1": {
+      "axis": [
+        -0.574577271938324,
+        0.2787609100341797,
+        -0.7695152759552002
+      ],
+      "curl_radians": -0.8
+    },
+    "mixamorig:RightHandThumb2": {
+      "axis": [
+        -0.23428624868392944,
+        0.27805227041244507,
+        0.9315564632415771
+      ],
+      "curl_radians": -0.45
+    },
+    "mixamorig:RightHandThumb3": {
+      "axis": [
+        -0.23428750038146973,
+        0.2780545651912689,
+        0.9315555095672607
+      ],
+      "curl_radians": -0.25
+    }
+  },
+  "Left_thumb_contact_error_metres": 0.00038931811201595146,
+  "Right_thumb_contact_error_metres": 0.00043704192701205836
+}

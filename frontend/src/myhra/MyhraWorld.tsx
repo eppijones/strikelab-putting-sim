@@ -1,19 +1,33 @@
-import {memo,useEffect,useMemo,useRef} from 'react';
+import {Suspense,memo,useEffect,useMemo,useRef} from 'react';
 import {useFrame,useThree,type ThreeEvent} from '@react-three/fiber';
 import {useGLTF,useTexture} from '@react-three/drei';
-import {AmbientLight,Box3,BufferGeometry,Color,DirectionalLight,DoubleSide,Float32BufferAttribute,HemisphereLight,InstancedMesh,Mesh,MeshBasicMaterial,MeshStandardMaterial,Object3D,OrthographicCamera,PlaneGeometry,RepeatWrapping,Scene,SRGBColorSpace,Vector2,Vector3,WebGLRenderTarget} from 'three';
+import {AmbientLight,Box3,BufferGeometry,Color,DirectionalLight,DoubleSide,Float32BufferAttribute,HemisphereLight,InstancedMesh,Mesh,MeshBasicMaterial,MeshStandardMaterial,Object3D,OrthographicCamera,PlaneGeometry,RedFormat,RepeatWrapping,Scene,SRGBColorSpace,Vector2,Vector3,WebGLRenderTarget} from 'three';
 import {terrainGeometry} from '../course/terrain';
-import {heightAt,surfaceAt,type Vec3} from '../course/engine';
+import {contains,heightAt,surfaceAt,type Vec3} from '../course/engine';
 import {ASSETS,type Hole} from './data';
 
 const random=(seed:number)=>()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296;};
+export const GROUND_TEXTURES=['surface-mask.png','grass_ground-diff.webp','path-mask.png','sand_02-diff.webp','grass_ground-nor_gl.webp','gravel_road-diff.webp','sand_02-nor_gl.webp','gravel_road-nor_gl.webp'].map(file=>ASSETS+file);
 
-export const Ground=memo(function Ground({hole,onAim}:{hole:Hole;onAim:(p:Vec3)=>void}){
- const [mask,detail,path,sand,normal,gravel,sandNormal,gravelNormal]=useTexture([ASSETS+'surface-mask.png',ASSETS+'grass_ground-diff.webp',ASSETS+'path-mask.png',ASSETS+'sand_02-diff.webp',ASSETS+'grass_ground-nor_gl.webp',ASSETS+'gravel_road-diff.webp',ASSETS+'sand_02-nor_gl.webp',ASSETS+'gravel_road-nor_gl.webp'],textures=>{
+export const Ground=memo(function Ground({hole,onAim,anchor,cameraInput}:{hole:Hole;onAim:(p:Vec3)=>void;anchor:Vec3;cameraInput?:{readonly current:{readonly gesture:string}}}){
+ const [mask,detail,path,sand,normal,gravel,sandNormal,gravelNormal]=useTexture(GROUND_TEXTURES,textures=>{
   for(const i of [1,3,4,5,6,7]){textures[i].wrapS=textures[i].wrapT=RepeatWrapping;textures[i].anisotropy=8;}
-  for(const i of [1,3,5])textures[i].colorSpace=SRGBColorSpace;textures[4].repeat.set(768*.5,768*.5);
+  for(const i of [1,3,5])textures[i].colorSpace=SRGBColorSpace;textures[4].repeat.set(768*.5,768*.5);textures[2].format=RedFormat;textures[2].needsUpdate=true;
  });
- const geometry=useMemo(()=>terrainGeometry(hole.world.terrain,hole.world.detail,768),[hole]);
+  const geometry=useMemo(()=>{
+   const tile=hole.world.terrain,n=tile.size,g=terrainGeometry(tile,hole.world.detail,768),indices:number[]=[],detail=hole.world.detail;
+   const near=(x:number,z:number)=>{const wx=x*tile.spacing,wz=z*tile.spacing;return (wx>=300&&wx<=466&&wz>=180&&wz<=650)||Math.hypot(wx-anchor[0],wz-anchor[2])<42||(!!detail&&wx>detail.origin[0]-8&&wx<detail.origin[0]+(detail.size-1)*detail.spacing+8&&wz>detail.origin[1]-8&&wz<detail.origin[1]+(detail.size-1)*detail.spacing+8);};
+   // The entire Myhra playing corridor retains every authoritative triangle.
+   // Only surrounding distant scenery is coarsened, identically in all tiers.
+   for(let z=0;z<n-4;z+=4)for(let x=0;x<n-4;x+=4){
+    const i=z*n+x;if(detail&&contains(detail,x*tile.spacing,z*tile.spacing)&&contains(detail,(x+4)*tile.spacing,(z+4)*tile.spacing))continue;
+    if(near(x,z)||near(x+4,z+4)){for(let dz=0;dz<4;dz++)for(let dx=0;dx<4;dx++){const a=i+dz*n+dx,wx=(x+dx)*tile.spacing,wz=(z+dz)*tile.spacing;if(detail&&contains(detail,wx,wz)&&contains(detail,wx+tile.spacing,wz+tile.spacing))continue;indices.push(a,a+n,a+1,a+1,a+n,a+n+1);}}
+    else if(near(x-4,z)||near(x+4,z)||near(x,z-4)||near(x,z+4)){
+     // Stitch the coarse cell to its fine neighbours at the shared midpoints.
+     const edge=[i,i+n,i+n*2,i+n*3,i+n*4,i+n*4+1,i+n*4+2,i+n*4+3,i+n*4+4,i+n*3+4,i+n*2+4,i+n+4,i+4,i+3,i+2,i+1];for(let j=0;j<16;j++)indices.push(i+n*2+2,edge[j],edge[(j+1)%16]);
+    }else indices.push(i,i+n*4,i+4,i+4,i+n*4,i+n*4+4);
+   }g.setIndex(indices);g.computeVertexNormals();return g;
+  },[hole,anchor]);
  const green=useMemo(()=>terrainGeometry(hole.world.detail!,undefined,768),[hole]);
  const material=useMemo(()=>{
   const m=new MeshStandardMaterial({roughness:.97,color:'#ffffff',normalMap:normal,normalScale:new Vector2(.28,.28)});
@@ -31,7 +45,8 @@ export const Ground=memo(function Ground({hole,onAim}:{hole:Hole;onAim:(p:Vec3)=
     vec3 rough=mix(vec3(.07,.118,.024),vec3(.18,.23,.06),noise);
     vec3 fairway=mix(vec3(.063,.144,.027),vec3(.092,.176,.043),stripe)+noise*.014;
     vec3 putting=mix(vec3(.165,.268,.083),vec3(.188,.291,.100),stripe)+noise*.01;
-    vec3 sand=texture2D(sandMap,vField.xz*.45).rgb*vec3(1.35,1.28,1.13);
+    vec3 sand=texture2D(sandMap,vField.xz*.45).rgb*vec3(1.28,1.22,1.10);
+    sand*=.96+.04*sin(vField.x*18.+sin(vField.z*.8)*2.);
     vec3 surface=mix(rough,fairway,field.r);surface=mix(surface,putting,field.g);surface=mix(surface,sand,field.b);
     vec3 fine=texture2D(detailMap,vField.xz*.5).rgb;
     float grains=dot(fine,vec3(.333));surface*=mix(.53+grains*2.7,.91+grains*.4,field.g);
@@ -48,16 +63,19 @@ export const Ground=memo(function Ground({hole,onAim}:{hole:Hole;onAim:(p:Vec3)=
    `);
   };m.customProgramCacheKey=()=> 'myhra-field-photo-01';return m;
  },[mask,detail,path,sand,normal,gravel,sandNormal,gravelNormal]);
- const down=useRef(new Map<number,[number,number]>()),multi=useRef(false);
+  const down=useRef(new Map<number,[number,number]>()),multi=useRef(false),lastAim=useRef(0);
  const start=(e:ThreeEvent<PointerEvent>)=>{if(e.button!==0)return;e.stopPropagation();down.current.set(e.pointerId,[e.clientX,e.clientY]);if(down.current.size>1)multi.current=true;};
- const end=(e:ThreeEvent<PointerEvent>)=>{const origin=down.current.get(e.pointerId);if(e.button===0&&origin&&!multi.current&&Math.hypot(e.clientX-origin[0],e.clientY-origin[1])<6){e.stopPropagation();onAim(e.point.toArray() as Vec3);}};
- useEffect(()=>{const clear=(e:PointerEvent)=>{down.current.delete(e.pointerId);if(!down.current.size)multi.current=false;};addEventListener('pointerup',clear);addEventListener('pointercancel',clear);return()=>{removeEventListener('pointerup',clear);removeEventListener('pointercancel',clear);};},[]);
- useEffect(()=>()=>{geometry.dispose();green.dispose();material.dispose();},[geometry,green,material]);
- return <group><mesh geometry={geometry} material={material} receiveShadow onPointerDown={start} onPointerUp={end}/><mesh geometry={green} material={material} receiveShadow onPointerDown={start} onPointerUp={end}/></group>;
+  const end=(e:ThreeEvent<PointerEvent>)=>{const origin=down.current.get(e.pointerId);if(e.button===0&&origin&&!multi.current&&(!cameraInput||cameraInput.current.gesture==='aim')&&Math.hypot(e.clientX-origin[0],e.clientY-origin[1])<6){e.stopPropagation();onAim(e.point.toArray() as Vec3);}};
+  const move=(e:ThreeEvent<PointerEvent>)=>{const origin=down.current.get(e.pointerId);if(origin&&!multi.current&&(!cameraInput||cameraInput.current.gesture==='aim')&&down.current.size===1&&Math.hypot(e.clientX-origin[0],e.clientY-origin[1])>=6&&performance.now()-lastAim.current>40){lastAim.current=performance.now();onAim(e.point.toArray() as Vec3);}};
+ useEffect(()=>{const clear=(e:PointerEvent)=>{down.current.delete(e.pointerId);if(!down.current.size)multi.current=false;},reset=()=>{down.current.clear();multi.current=false;};addEventListener('pointerup',clear);addEventListener('pointercancel',clear);addEventListener('blur',reset);addEventListener('orientationchange',reset);document.addEventListener('visibilitychange',reset);return()=>{removeEventListener('pointerup',clear);removeEventListener('pointercancel',clear);removeEventListener('blur',reset);removeEventListener('orientationchange',reset);document.removeEventListener('visibilitychange',reset);};},[]);
+ useEffect(()=>()=>geometry.dispose(),[geometry]);
+ useEffect(()=>()=>green.dispose(),[green]);
+ useEffect(()=>()=>material.dispose(),[material]);
+  return <group><mesh geometry={geometry} material={material} receiveShadow onPointerDown={start} onPointerMove={move} onPointerUp={end}/><mesh geometry={green} material={material} receiveShadow onPointerDown={start} onPointerMove={move} onPointerUp={end}/></group>;
 });
 
 function TreeLayer({hole,anchor,high,birch=false}:{hole:Hole;anchor:Vec3;high:boolean;birch?:boolean}){
- const {scene}=useGLTF(ASSETS+(birch?'birch.glb':'fir.glb'));const {gl}=useThree();
+ const {scene}=useGLTF(ASSETS+(birch?(high?'birch.glb':'birch-mobile.glb'):'fir.glb'));const {gl}=useThree();
  const target=useMemo(()=>{const t=new WebGLRenderTarget(512,1024);t.texture.colorSpace=SRGBColorSpace;return t;},[]),impostor=target.texture;
  const near=useRef<(InstancedMesh|null)[]>([]),far=useRef<InstancedMesh>(null);
  const source=useMemo(()=>{
@@ -75,7 +93,7 @@ function TreeLayer({hole,anchor,high,birch=false}:{hole:Hole;anchor:Vec3;high:bo
  },[source,gl,target]);
  const placements=useMemo(()=>{
   const sorted=hole.data.trees.filter((_,i)=>birch?i%3===0:i%3!==0).map(t=>({t:birch?[t[0],t[1],t[2],t[3]*.72,t[4]]:t,d:Math.hypot(t[0]-anchor[0],t[2]-anchor[2])})).filter(o=>o.d<600).sort((a,b)=>a.d-b.d);
-  const count=birch?(high?22:8):(high?5:2),close=sorted.filter(o=>o.d<100).slice(0,count);return {near:close.map(o=>o.t),far:sorted.slice(close.length).map(o=>o.t)};
+   const count=birch?(high?8:3):(high?4:2),close=sorted.filter(o=>o.d<85).slice(0,count);return {near:close.map(o=>o.t),far:sorted.slice(close.length).map(o=>o.t)};
  },[hole,anchor,high,birch]);
  const plane=useMemo(()=>new PlaneGeometry(8,15.3).translate(0,7.55,0),[]);
  const billboard=useMemo(()=>{
@@ -98,10 +116,19 @@ function TreeLayer({hole,anchor,high,birch=false}:{hole:Hole;anchor:Vec3;high:bo
  useEffect(()=>()=>{plane.dispose();billboard.dispose();},[plane,billboard]);
  return <group>{source.map((p,i)=><instancedMesh key={i} ref={m=>{near.current[i]=m;}} args={[p.geometry,p.material,placements.near.length]} castShadow receiveShadow/>)}{impostor&&<instancedMesh ref={far} args={[plane,billboard,placements.far.length]} frustumCulled={false}/>}</group>;
 }
-function FirForest({hole}:{hole:Hole}){
+function firPlacements(hole:Hole,anchor:Vec3,high:boolean){const all=hole.data.trees.filter((_,i)=>i%3!==0);const near=all.filter(t=>Math.hypot(t[0]-anchor[0],t[2]-anchor[2])<72).sort((a,b)=>Math.hypot(a[0]-anchor[0],a[2]-anchor[2])-Math.hypot(b[0]-anchor[0],b[2]-anchor[2])).slice(0,high?4:2);return {near,far:all.filter(t=>!near.includes(t))};}
+function NearFirs({hole,anchor,high}:{hole:Hole;anchor:Vec3;high:boolean}){
+ const {scene}=useGLTF(ASSETS+(high?'fir-near.glb':'fir-near-mobile.glb')),meshes=useRef<(InstancedMesh|null)[]>([]);
+ const parts=useMemo(()=>{scene.updateMatrixWorld(true);const box=new Box3().setFromObject(scene),scale=14.4/(box.max.y-box.min.y),center=box.getCenter(new Vector3()),parts:Mesh[]=[];scene.traverse(o=>{if(o instanceof Mesh){const m=o.clone();m.geometry=o.geometry.clone().applyMatrix4(o.matrixWorld).scale(scale,scale,scale).translate(-center.x*scale,-box.min.y*scale,-center.z*scale);m.material=(o.material as MeshStandardMaterial).clone();(m.material as MeshStandardMaterial).envMapIntensity=.45;parts.push(m);}});return parts;},[scene]);
+ const trees=useMemo(()=>firPlacements(hole,anchor,high).near,[hole,anchor,high]);
+ useEffect(()=>{const o=new Object3D();trees.forEach((t,i)=>{o.position.set(t[0],t[1],t[2]);o.rotation.set(0,t[4],0);o.scale.setScalar(t[3]/14.4);o.updateMatrix();meshes.current.forEach(m=>m?.setMatrixAt(i,o.matrix));});meshes.current.forEach(m=>{if(m){m.instanceMatrix.needsUpdate=true;m.computeBoundingSphere();}});},[trees]);
+ useEffect(()=>()=>parts.forEach(m=>{m.geometry.dispose();(m.material as MeshStandardMaterial).dispose();}),[parts]);
+ return <group>{parts.map((m,i)=><instancedMesh key={i} ref={r=>{meshes.current[i]=r;}} args={[m.geometry,m.material,trees.length]} castShadow receiveShadow/>)}</group>;
+}
+function FirForest({hole,anchor,high}:{hole:Hole;anchor:Vec3;high:boolean}){
  const atlas=useTexture(ASSETS+'fir-atlas.webp',t=>{t.colorSpace=SRGBColorSpace;t.anisotropy=8;});
  const mesh=useRef<InstancedMesh>(null);
- const trees=useMemo(()=>hole.data.trees.filter((_,i)=>i%3!==0),[hole]);
+  const trees=useMemo(()=>firPlacements(hole,anchor,high).far,[hole,anchor,high]);
  const geometry=useMemo(()=>new PlaneGeometry(8,15.3).translate(0,7.55,0),[]);
  const material=useMemo(()=>{
   const m=new MeshBasicMaterial({map:atlas,alphaTest:.13,alphaToCoverage:true,side:DoubleSide,fog:true,toneMapped:false});
@@ -129,12 +156,12 @@ function FirForest({hole}:{hole:Hole}){
  useEffect(()=>()=>{geometry.dispose();material.dispose();},[geometry,material]);
  return <instancedMesh ref={mesh} args={[geometry,material,trees.length]} frustumCulled={false}/>;
 }
-export const Woodland=memo(function Woodland(props:{hole:Hole;anchor:Vec3;high:boolean}){return <><FirForest hole={props.hole}/><TreeLayer {...props} birch/></>;});
+export const Woodland=memo(function Woodland(props:{hole:Hole;anchor:Vec3;high:boolean}){return <><FirForest {...props}/><Suspense fallback={null}><NearFirs {...props}/></Suspense><Suspense fallback={null}><TreeLayer {...props} birch/></Suspense></>;});
 
 export const Turf=memo(function Turf({hole,anchor,high}:{hole:Hole;anchor:Vec3;high:boolean}){
  const mesh=useRef<InstancedMesh>(null),clock=useRef({value:0});
  const geometry=useMemo(()=>{const g=new BufferGeometry();g.setAttribute('position',new Float32BufferAttribute([-.004,0,0,.004,0,0,-.002,.55,.008,.002,.55,.008,.004,1,.014],3));g.setAttribute('uv',new Float32BufferAttribute([0,0,1,0,0,.5,1,.5,.5,1],2));g.setIndex([0,1,2,1,3,2,2,3,4]);g.computeVertexNormals();return g;},[]);
- const count=high?160000:55000;
+  const count=high?42000:12000;
  const material=useMemo(()=>{
   const m=new MeshStandardMaterial({color:'#ffffff',emissive:'#374a1c',emissiveIntensity:.25,roughness:1,side:DoubleSide});
   m.onBeforeCompile=s=>{s.uniforms.turfTime=clock.current;s.vertexShader='uniform float turfTime; varying float bladeHeight;\n'+s.vertexShader;s.fragmentShader='varying float bladeHeight;\n'+s.fragmentShader;s.vertexShader=s.vertexShader.replace('#include <begin_vertex>',`#include <begin_vertex>\nbladeHeight=position.y; transformed.x+=sin(turfTime*1.2+instanceMatrix[3].x*.27+instanceMatrix[3].z*.21)*position.y*position.y*.06;`);s.fragmentShader=s.fragmentShader.replace('#include <color_fragment>','#include <color_fragment>\ndiffuseColor.rgb*=.48+bladeHeight*.52;');};return m;

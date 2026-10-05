@@ -1,0 +1,11 @@
+{
+  "kind": "Chrome headless; emulated network and mobile viewport, not physical iPhone",
+  "network": {
+    "mbps": 20,
+    "latencyMs": 80,
+    "cache": "disabled",
+    "readyMs": 7117,
+    "bytesAtReady": 7920973
+  },
+  "diagnostics": "Performance diagnostics\n\n120 fps · p95 8.7 ms · p99 8.8 ms\n333k triangles · 29 draw calls\n\nCurrent browser sample. Physical-device acceptance is reported separately."
+}

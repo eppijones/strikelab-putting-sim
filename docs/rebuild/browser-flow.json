@@ -1,0 +1,61 @@
+{
+  "url": "http://127.0.0.1:5175/play/grenland/myhra",
+  "kind": "Chrome headless with emulated touch and viewport; not physical iPhone or controller",
+  "checks": [
+    {
+      "name": "mobile scene loads without runtime errors",
+      "passed": true
+    },
+    {
+      "name": "default touch release accepts one absolute-strength shot",
+      "passed": true,
+      "detail": 0.6700000762939453
+    },
+    {
+      "name": "reload during flight preserves one accepted shot",
+      "passed": true
+    },
+    {
+      "name": "visible cancellation zone does not add a stroke",
+      "passed": true
+    },
+    {
+      "name": "pointer cancellation leaves controls usable",
+      "passed": true
+    },
+    {
+      "name": "putting practice preserves the unfinished round",
+      "passed": true
+    },
+    {
+      "name": "return from practice restores saved ball",
+      "passed": true
+    },
+    {
+      "name": "cart accelerates and brakes with keyboard",
+      "passed": true,
+      "detail": "23 km/h"
+    },
+    {
+      "name": "rotation retains the round and responsive controls",
+      "passed": true
+    },
+    {
+      "name": "manual replay runs in 3D without scoring",
+      "passed": true
+    },
+    {
+      "name": "what-if outcome is separate from historical and active rounds",
+      "passed": true
+    },
+    {
+      "name": "journal and scenario survive reload",
+      "passed": true
+    },
+    {
+      "name": "no browser console errors",
+      "passed": true
+    }
+  ],
+  "errors": []
+}

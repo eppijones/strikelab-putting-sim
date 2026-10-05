@@ -57,7 +57,9 @@ const putt = { speed: 2, bearing: 0, launch: 0, spin: 0 };
 test("flat roll agrees with stopping-distance equation within 3cm", () => {
   const w = world(),
     r = simulate(w, start, putt),
-    expected = 4 / ((2 * 9.81 * 0.56) / 10);
+    // Independent standard roll reference: USGA 6.4 ft/s exits a Stimpmeter,
+    // travelling the stated green speed in feet on a level surface.
+    expected = 4 / ((6.4 * .3048) ** 2 / (10 * .3048));
   assert.ok(Math.abs(r.distance - expected) < 0.03);
   assert.equal(r.penalty, 0);
 });

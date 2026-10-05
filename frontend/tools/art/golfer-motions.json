@@ -1,0 +1,13 @@
+{
+  "actions": [
+    "GolfDriver",
+    "GolfIron",
+    "GolfChip",
+    "GolfPutt"
+  ],
+  "authored_in": "Blender",
+  "licence": "project-authored on existing owner-generated character",
+  "fps": 100,
+  "impact_seconds": 1.24,
+  "approval": "Pending coach and slow-motion visual review"
+}

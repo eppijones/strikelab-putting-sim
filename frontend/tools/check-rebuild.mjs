@@ -1,0 +1,16 @@
+import {chromium} from 'playwright';
+import {mkdir,writeFile} from 'node:fs/promises';
+const output='../docs/rebuild';await mkdir(output,{recursive:true});
+const browser=await chromium.launch({channel:'chrome'});
+const context=await browser.newContext({viewport:{width:1440,height:900}});
+const page=await context.newPage(),errors=[];
+page.on('pageerror',e=>errors.push(e.message));
+page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
+await page.goto('http://127.0.0.1:5175/play/grenland/myhra');
+await page.getByRole('button',{name:'Pull back and swing through',exact:true}).waitFor({timeout:90000});
+await page.waitForFunction(()=>!document.querySelector('.mh-swing-pad')?.disabled,{timeout:90000});
+await page.waitForTimeout(2500);
+await page.screenshot({path:output+'/desktop-initial.png'});
+console.log(JSON.stringify({title:await page.title(),body:(await page.locator('body').innerText()).slice(0,3000),errors}));
+await writeFile(output+'/initial-check.json',JSON.stringify({errors,url:page.url()},null,2));
+await browser.close();

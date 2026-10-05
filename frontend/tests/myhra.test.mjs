@@ -4,12 +4,13 @@ import {readFileSync} from 'node:fs';
 import {advise,speedFor} from '../src/myhra/caddie.ts';
 import {freshHole,restoreHole} from '../src/myhra/round.ts';
 import {CLUBS,simulate,heightAt,surfaceAt,distance} from '../src/course/engine.ts';
+import {simulateShot} from '../src/myhra/shot.ts';
 
 const root=new URL('../public/courses/grenland/',import.meta.url);
 const data=JSON.parse(readFileSync(new URL('myhra/hole.json',root)));
 function tile(spec){const heights=readFileSync(new URL(spec.url,root)),lies=readFileSync(new URL(spec.surfaces,root));return {...spec,heights:new Float32Array(heights.buffer.slice(heights.byteOffset,heights.byteOffset+heights.byteLength)),lies:new Uint8Array(lies)};}
 const world={terrain:tile(data.terrain),detail:tile(data.detail),pin:data.pin,hazards:data.regions.filter(r=>r.kind==='water'),stimp:10,wind:[0,0]},hole={world,data};
-const shot=(ball,a,power=1,angle=0)=>simulate(world,ball,{speed:speedFor(world,ball,a.club,a.power)*power,bearing:a.bearing+angle*Math.PI/180,launch:CLUBS[a.club].loft,spin:CLUBS[a.club].spin});
+const shot=(ball,a,power=1,angle=0)=>simulateShot(world,ball,{club:a.club,power:a.power*power,bearing:a.bearing+angle*Math.PI/180,puttRange:a.puttRange}).result;
 
 test('the caddie tee line leaves room for small human power and direction errors',()=>{
  const a=advise(world,data.tee);

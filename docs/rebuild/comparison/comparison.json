@@ -1,0 +1,15 @@
+{
+  "kind": "Actual local production-build footage; same viewport and mouse gesture. Different input/physics models are intentional. Baseline is a Git archive of 128fdff, not the altered working checkout.",
+  "records": [
+    {
+      "name": "baseline-128fdff",
+      "url": "http://127.0.0.1:4176/play/grenland/myhra",
+      "errors": []
+    },
+    {
+      "name": "rebuild",
+      "url": "http://127.0.0.1:4175/play/grenland/myhra",
+      "errors": []
+    }
+  ]
+}

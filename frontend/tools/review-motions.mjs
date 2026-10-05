@@ -1,0 +1,10 @@
+import {chromium} from 'playwright';import {mkdir,writeFile} from 'node:fs/promises';
+const out='../docs/rebuild/motions';await mkdir(out,{recursive:true});const browser=await chromium.launch({channel:'chrome'}),context=await browser.newContext({viewport:{width:900,height:900},recordVideo:{dir:out,size:{width:900,height:900}}}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
+for(const [family,club,style] of [['driver',0,'full'],['iron',6,'full'],['chip',11,'chip'],['putt',13,'full']])for(const angle of ['front','side','back']){
+ await page.goto(`http://127.0.0.1:5175/tools/asset-review.html?asset=golfer&angle=${angle}&club=${club}&style=${style}`);await page.waitForFunction(()=>window.assetScene?.getObjectByName('GolfClubAnchor'),null,{timeout:60000});await page.waitForTimeout(350);
+ for(const [label,time,back] of [['address',-1,0],['top',-1,1],['impact',.24,1],['finish',1.4,1]]){await page.evaluate(({time,back})=>{window.reviewTime.current=time;window.reviewSwing.current.phase='backswing';window.reviewSwing.current.amount=back;window.reviewSwing.current.peak=back;}, {time,back});await page.waitForTimeout(80);await page.screenshot({path:`${out}/${family}-${angle}-${label}.png`});}
+ // A slow pass records the actual authored action, rather than fabricated poses.
+ for(let i=0;i<=20;i++){await page.evaluate(i=>{window.reviewTime.current=-1;window.reviewSwing.current.amount=i/20;},i);await page.waitForTimeout(35);}for(let i=0;i<=30;i++){await page.evaluate(i=>window.reviewTime.current=i/30*1.4,i);await page.waitForTimeout(40);}
+ console.log('REVIEW',family,angle);
+}
+await page.close();await context.close();await writeFile(out+'/review.json',JSON.stringify({families:4,angles:3,posesPerAngle:4,kind:'Rendered authored action poses and slow motion; human coach approval remains pending',errors},null,2));await browser.close();

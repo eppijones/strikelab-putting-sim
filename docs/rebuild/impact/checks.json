@@ -1,0 +1,78 @@
+{
+  "kind": "Rendered authored grip transform at 0.24 s release impact, 1.24 s clip time; deterministic full/45%/8% strength. Not coach certification.",
+  "checks": [
+    {
+      "family": "driver",
+      "power": 1,
+      "passed": true,
+      "maxImpactTransformDifference": 0
+    },
+    {
+      "family": "driver",
+      "power": 0.45,
+      "passed": true,
+      "maxImpactTransformDifference": 0
+    },
+    {
+      "family": "driver",
+      "power": 0.08,
+      "passed": true,
+      "maxImpactTransformDifference": 0
+    },
+    {
+      "family": "iron",
+      "power": 1,
+      "passed": true,
+      "maxImpactTransformDifference": 0
+    },
+    {
+      "family": "iron",
+      "power": 0.45,
+      "passed": true,
+      "maxImpactTransformDifference": 0
+    },
+    {
+      "family": "iron",
+      "power": 0.08,
+      "passed": true,
+      "maxImpactTransformDifference": 0
+    },
+    {
+      "family": "chip",
+      "power": 1,
+      "passed": true,
+      "maxImpactTransformDifference": 0
+    },
+    {
+      "family": "chip",
+      "power": 0.45,
+      "passed": true,
+      "maxImpactTransformDifference": 0
+    },
+    {
+      "family": "chip",
+      "power": 0.08,
+      "passed": true,
+      "maxImpactTransformDifference": 0
+    },
+    {
+      "family": "putt",
+      "power": 1,
+      "passed": true,
+      "maxImpactTransformDifference": 0
+    },
+    {
+      "family": "putt",
+      "power": 0.45,
+      "passed": true,
+      "maxImpactTransformDifference": 0
+    },
+    {
+      "family": "putt",
+      "power": 0.08,
+      "passed": true,
+      "maxImpactTransformDifference": 0
+    }
+  ],
+  "errors": []
+}

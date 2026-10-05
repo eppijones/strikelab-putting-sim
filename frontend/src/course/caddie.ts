@@ -15,7 +15,7 @@ export function suggestShot(world: World, ball: Vec3, club: Club) {
     const result = simulate(world, ball, {
       speed: (club.speed * power) / 100,
       bearing: bearing + (aim * Math.PI) / 180,
-      launch: club.loft,
+      launch: club.launch ?? club.loft,
       spin: club.spin,
     });
     const error = result.made

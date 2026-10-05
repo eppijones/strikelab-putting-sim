@@ -1,0 +1,13 @@
+import {chromium} from 'playwright';
+import {writeFile} from 'node:fs/promises';
+const browser=await chromium.launch({channel:'chrome'}),context=await browser.newContext({viewport:{width:393,height:852},hasTouch:true,isMobile:true,serviceWorkers:'block'}),page=await context.newPage(),cdp=await context.newCDPSession(page);
+await cdp.send('Network.enable');await cdp.send('Network.setCacheDisabled',{cacheDisabled:true});
+await cdp.send('Network.emulateNetworkConditions',{offline:false,latency:80,downloadThroughput:2500000,uploadThroughput:500000});
+let transferred=0;cdp.on('Network.loadingFinished',e=>transferred+=e.encodedDataLength);
+const started=Date.now();await page.goto(process.env.GRENLAND_TEST_URL??'http://127.0.0.1:4175/play/grenland/myhra');await page.waitForFunction(()=>document.querySelector('.mh-swing-pad')?.disabled===false,null,{timeout:90000});
+const readyMs=Date.now()-started,bytesAtReady=transferred;
+await cdp.send('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:-1,uploadThroughput:-1});
+await page.getByRole('button',{name:'Menu',exact:true}).click();await page.locator('.mh-diagnostics').waitFor();await page.locator('.mh-diagnostics').click();
+await page.waitForTimeout(5000);const diagnostics=await page.locator('.mh-diagnostics').innerText();
+const result={kind:'Chrome headless; emulated network and mobile viewport, not physical iPhone',network:{mbps:20,latencyMs:80,cache:'disabled',readyMs,bytesAtReady},diagnostics};
+console.log(JSON.stringify(result,null,2));await writeFile('../docs/rebuild/load-measurement.json',JSON.stringify(result,null,2));await browser.close();

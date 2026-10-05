@@ -1,0 +1,62 @@
+{
+  "url": "http://127.0.0.1:5175/play/grenland/myhra",
+  "kind": "Automated browser checks, synthetic interruption and injected controller events; no physical-device claims",
+  "checks": [
+    {
+      "name": "Two-finger orbit owns the gesture even when the second finger is over sky",
+      "passed": true
+    },
+    {
+      "name": "A fresh one-finger ground gesture aims after orbit ends",
+      "passed": true
+    },
+    {
+      "name": "Second touch does not steal or release the primary swing",
+      "passed": true
+    },
+    {
+      "name": "Window interruption cancels the pending gesture; accepted shot stays single",
+      "passed": true,
+      "detail": "Synthetic blur event, not an iPhone background transition"
+    },
+    {
+      "name": "Orientation interruption cancels without a stroke",
+      "passed": true
+    },
+    {
+      "name": "Controller spring to neutral does not fire",
+      "passed": true
+    },
+    {
+      "name": "Reconnect with a deflected stick is ignored until neutral",
+      "passed": true
+    },
+    {
+      "name": "Rearmed deliberate controller stroke is accepted exactly once",
+      "passed": true,
+      "detail": "Injected standard gamepad; physical DualSense remains untested"
+    },
+    {
+      "name": "Cart joystick rotation cancels motion and brakes",
+      "passed": true
+    },
+    {
+      "name": "Three-click starts, locks power and then locks accuracy",
+      "passed": true
+    },
+    {
+      "name": "Export/import creates a separate copy and preserves the original record",
+      "passed": true
+    },
+    {
+      "name": "No Chromium runtime errors",
+      "passed": true
+    },
+    {
+      "name": "WebKit loads, enters putting practice and restores the round",
+      "passed": true,
+      "detail": "Desktop WebKit phone emulation; not Safari on a physical iPhone"
+    }
+  ],
+  "errors": []
+}

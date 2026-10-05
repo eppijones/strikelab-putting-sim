@@ -1,0 +1,44 @@
+{
+  "kind": "Chrome with emulated default touch; all shots through UI",
+  "passed": true,
+  "strokes": 3,
+  "shots": [
+    {
+      "club": "6 iron",
+      "power": 1,
+      "lie": "fairway",
+      "end": [
+        355.13048235774414,
+        4.824063073720613,
+        374.1229299098231
+      ],
+      "penalty": 0,
+      "distance": 197.99312017342572
+    },
+    {
+      "club": "9 iron",
+      "power": 1,
+      "lie": "fairway",
+      "end": [
+        384.13540693856294,
+        2.596667189822491,
+        240.94618341636664
+      ],
+      "penalty": 0,
+      "distance": 136.29868472043796
+    },
+    {
+      "club": "Putter",
+      "power": 0.07999992370605469,
+      "lie": "green",
+      "end": [
+        384,
+        2.5746533155441282,
+        241.33
+      ],
+      "penalty": 0,
+      "distance": 0.4070014851115205
+    }
+  ],
+  "errors": []
+}

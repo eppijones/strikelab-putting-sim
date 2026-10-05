@@ -1,24 +1,35 @@
 {
-  "updated": "2026-10-04",
-  "scope": "Myhra single-hole visual benchmark",
+  "updated": "2026-10-05",
+  "scope": "Myhra rebuilt shot and manual real-round replay preview",
   "generated": [
     {
       "file": "golfer.glb",
       "provider": "Tripo",
       "model_id": "ed98fa9d-3d7f-43a3-8076-33d97c5f5617",
-      "work": "Generated golfer, retopology, Mixamo-style humanoid rig. Runtime swing is authored IK; generated motion attempts were not used."
+      "work": "Generated project-owner golfer and humanoid rig. Anatomical grip/finger/thumb corrections and four baked driver/iron/chip/putt actions authored in Blender; no downloaded motion-capture animations. Desktop and mobile texture derivatives.",
+      "derivatives": [
+        "golfer-grip.glb",
+        "golfer-motions.glb",
+        "golfer-motions-mobile.glb"
+      ]
     },
     {
       "file": "cart.glb",
       "provider": "Tripo",
       "model_id": "4449af54-ee8d-49f8-b6ad-cb3977ca4cb5",
-      "work": "Generated and retopologized golf cart; windshield separated from opaque body and given a clear material."
+      "work": "Generated and retopologized golf cart; windshield separated from opaque body and given a clear material.",
+      "derivatives": [
+        "cart-mobile.glb"
+      ]
     },
     {
       "file": "birch.glb",
       "provider": "Tripo",
       "model_id": "3f74bb0f-c5a0-4b35-ad9e-ed988a68f7a3",
-      "work": "Generated and retopologized tree."
+      "work": "Generated and retopologized tree.",
+      "derivatives": [
+        "birch-mobile.glb"
+      ]
     }
   ],
   "credit_ledger": {
@@ -29,17 +40,34 @@
     "three_unused_motion_attempts": 60,
     "cart_generation_retopology": 95,
     "birch_generation_retopology": 95,
-    "purchases": 0
+    "purchases": 0,
+    "original_pass": {
+      "starting_balance": 11810,
+      "last_verified_balance": 11445,
+      "spent": 365
+    },
+    "rebuild_spend": 0,
+    "current_visible_balance": 11335,
+    "balance_checked": "2026-10-05",
+    "note": "Original-pass costs retained. The current account balance includes activity outside this rebuild; do not attribute the difference to this pass."
   },
   "cc0": [
     {
       "file": "fir-atlas.webp",
       "source": "https://polyhaven.com/a/fir_tree_01",
-      "work": "Four-view atlas baked from original full-detail tree, retaining twig alpha."
+      "work": "Four-view atlas baked from original full-detail tree, retaining twig alpha. Near-tree mesh LOD and mobile texture derivative from the same original CC0 tree.",
+      "derivatives": [
+        "fir-near.glb",
+        "fir-near-mobile.glb"
+      ]
     },
     {
       "file": "morning.hdr",
-      "source": "https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky"
+      "source": "https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky",
+      "derivatives": [
+        "morning-mobile.hdr"
+      ],
+      "work": "Original HDR downsampled to 1024x512 for the mobile tier."
     },
     {
       "files": "grass_ground-diff.webp, grass_ground-nor_gl.webp",
@@ -66,14 +94,56 @@
     {
       "source": "https://grenlandgolf.no/wp-content/uploads/2026/08/DJI_20260519185144_0023_D.jpg",
       "usage": "Reviewed club course photograph, water and surrounding maintained grounds."
+    },
+    {
+      "source": "https://grenlandgolf.no/wp-content/uploads/2025/03/Grenland-og-Omegn-Golfklubb-Arsberetning-2024-17-03-25.pdf",
+      "usage": "Pages 2 and 15 document work around Hole 1 green/foregreen and the creation of a pond in 2024. This postdates the terrain source. The report establishes that these changes occurred, but supplies no surveyed contours or coordinates."
     }
   ],
-  "terrain": "Existing Kartverket-derived course dataset; see parent manifest for source attribution. Rotated/cropped with orientation preserved, with local tee, road and bunker surface dressing.",
+  "terrain": "Kartverket-derived source grid, plus separately authored bunker basin/lip height derivatives. Render, collision, grid and physics share those derivatives. Added density is not a green survey. See hole.json surfaceAuthorship and tools/author-bunker-basins.mjs.",
   "routing": "OpenStreetMap contributors, ODbL, https://www.openstreetmap.org/way/1364670544",
   "limitations": [
     "Pond shape and path are approximations informed by references, not a measured reconstruction.",
     "The practice pin is synthetic.",
     "Only Myhra receives this visual treatment. Other holes retain the earlier community course preview.",
-    "Physical iPhone and PS5 hardware still require hands-on testing; browser verification uses Chrome, WebKit and a simulated standard gamepad."
+    "Physical iPhone and PS5 hardware still require hands-on testing; browser verification uses Chrome, WebKit and a simulated standard gamepad.",
+    "Mobile texture residency is a budget estimate, not a physical GPU measurement.",
+    "Visual course acceptance and professional swing approval have not been certified."
+  ],
+  "rightsReview": {
+    "checked": "2026-10-05",
+    "tripoAccountPlan": "Pro (visible logged-in account UI)",
+    "basis": "Existing owner-account generated assets; paid-user commercial modification and distribution guidance reviewed. This check is not a receipt proving the generation-date subscription.",
+    "tripoGuide": "https://www.tripo3d.ai/help/privacy-policy/how-to-use-tripo-models-commercially",
+    "polyHavenLicense": "https://polyhaven.com/license",
+    "newThirdPartyAnimations": 0,
+    "newCreditSpend": 0
+  },
+  "authored": [
+    {
+      "files": [
+        "terrain-basins.f32",
+        "green-basins.f32"
+      ],
+      "method": "32 cm bowl and 5.5 cm lip on existing candidate sand footprints in the Myhra corridor; original height files retained.",
+      "classification": "authored approximation",
+      "validation": "Exact dimensions and 2024 green/pond reconstruction still need club/reference approval."
+    },
+    {
+      "files": [
+        "golfer-motions.glb",
+        "golfer-motions-mobile.glb"
+      ],
+      "actions": [
+        "GolfDriver",
+        "GolfIron",
+        "GolfChip",
+        "GolfPutt"
+      ],
+      "source": "tools/art/golfer-motions.blend",
+      "impactSeconds": 1.24,
+      "classification": "project-authored baked actions, not professional motion capture",
+      "validation": "48 rendered poses and slow-motion footage reviewed; golf-coach approval pending."
+    }
   ]
 }
