@@ -45,7 +45,7 @@ export const Ground=memo(function Ground({hole,onAim,anchor,cameraInput}:{hole:H
     vec3 rough=mix(vec3(.07,.118,.024),vec3(.18,.23,.06),noise);
     vec3 fairway=mix(vec3(.063,.144,.027),vec3(.092,.176,.043),stripe)+noise*.014;
     vec3 putting=mix(vec3(.165,.268,.083),vec3(.188,.291,.100),stripe)+noise*.01;
-    vec3 sand=texture2D(sandMap,vField.xz*.45).rgb*vec3(1.28,1.22,1.10);
+    vec3 sand=mix(texture2D(sandMap,vField.xz*.45).rgb*vec3(1.40,1.32,1.16),vec3(.52,.43,.29),.38);
     sand*=.96+.04*sin(vField.x*18.+sin(vField.z*.8)*2.);
     vec3 surface=mix(rough,fairway,field.r);surface=mix(surface,putting,field.g);surface=mix(surface,sand,field.b);
     vec3 fine=texture2D(detailMap,vField.xz*.5).rgb;

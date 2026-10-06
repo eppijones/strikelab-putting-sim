@@ -10,7 +10,8 @@ Asset-specific links and transformations are recorded in sources.json.
 Golfer, cart and birch: generated in the project owner's Tripo account.
 These are generated assets, not CC0 Poly Haven assets. Retopologized and
 compressed for this game. Club meshes and runtime IK animation are authored
-project code. No Mixamo motion-capture downloads are included.
+project code. The embedded golfer actions now use owner-downloaded Mixamo
+golf body motions with project-authored grip, club and terrain corrections.
 
 Grenland course diagrams and drone imagery were reviewed as references only.
 No club photographs or videos are redistributed in this directory.
@@ -23,10 +24,17 @@ The logged-in project account showed Pro; Tripo paid-user modification and
 commercial distribution guidance was reviewed at:
 https://www.tripo3d.ai/help/privacy-policy/how-to-use-tripo-models-commercially
 
-GolfGrip and GolfDriver/GolfIron/GolfChip/GolfPutt were authored in Blender
-for this project. Editable Blender sources and build scripts are included.
-They are not redistributed third-party mocap or claims of coach-approved
-professional technique. No new Tripo generation credits were spent.
+GolfGrip was authored in Blender. GolfDriver/GolfIron/GolfChip/GolfPutt use
+Adobe Mixamo golf FBX motions downloaded by the owner, retargeted and trimmed
+in Blender, with corrected avatar proportions and anatomical hand frames.
+The authored club calibration and grip constraints accompany those motions.
+Mixamo permits embedded video-game use; no raw Mixamo FBX or new working
+Blend file is distributed in this repository or as an animation asset pack.
+Retarget build script and trim/provenance metadata are included. Earlier
+project-authored Blender actions remain as historical fallback sources.
+https://helpx.adobe.com/creative-cloud/faq/mixamo-faq.html
+https://community.adobe.com/questions-696/mixamo-faq-licensing-royalties-ownership-eula-and-tos-589400
+Professional technique remains subject to coach review. New Tripo spend: 0.
 
 Bunker basin/lip heights are authored approximations, with the original
 height datasets retained. See sources.json and hole.json surfaceAuthorship.

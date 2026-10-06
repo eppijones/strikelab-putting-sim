@@ -6,6 +6,7 @@ try{
   for(const power of [1,.45,.08]){
    await page.evaluate(power=>{window.reviewTime.current=-1;window.reviewSwing.current.phase='backswing';window.reviewSwing.current.amount=power;window.reviewSwing.current.peak=power;window.reviewSwing.current.lockedPower=power;},power);await page.waitForTimeout(150);
    await page.evaluate(()=>{window.reviewSwing.current.phase='finish';window.reviewTime.current=.24;});await page.waitForTimeout(80);const matrix=await page.evaluate(()=>Array.from(window.assetScene.getObjectByName('PlayerClubGrip').matrixWorld.elements));assert.ok(matrix.every(Number.isFinite));if(!full)full=matrix;else assert.ok(Math.max(...matrix.map((x,i)=>Math.abs(x-full[i])))<1e-6,'Partial power must reach the full square impact transform');
+   const length=club===13?.86:club>=3?.99:1.1,head=[matrix[12]-length*matrix[4],matrix[13]-length*matrix[5],matrix[14]-length*matrix[6]],expected=club===13?[-.03935,.016,.63]:club>=3?[-.02835,.027,.8]:[-.07135,.038,.92];assert.ok(Math.hypot(...head.map((x,i)=>x-expected[i]))<.01,'Impact club head must meet the nominal ball, not merely match across powers');
    await page.screenshot({path:`${out}/${family}-${power}-impact.png`});checks.push({family,power,passed:true,maxImpactTransformDifference:Math.max(...matrix.map((x,i)=>Math.abs(x-full[i])))});
    // Capture an actual short stroke through address, partial top, impact and follow.
    for(let i=0;i<=12;i++){await page.evaluate(({i,power})=>{window.reviewTime.current=-1;window.reviewSwing.current.phase='backswing';window.reviewSwing.current.amount=power*i/12;},{i,power});await page.waitForTimeout(25);}
@@ -13,4 +14,4 @@ try{
   }console.log('PASS impact',family);
  }assert.deepEqual(errors,[]);
 }catch(error){checks.push({passed:false,error:String(error)});console.error(error);process.exitCode=1;}
-await page.close();const video=await page.video().path();await context.close();await copyFile(video,out+'/partial-strokes.webm');await writeFile(out+'/checks.json',JSON.stringify({kind:'Rendered authored grip transform at 0.24 s release impact, 1.24 s clip time; deterministic full/45%/8% strength. Not coach certification.',checks,errors},null,2));await browser.close();
+await page.close();const video=await page.video().path();await context.close();await copyFile(video,out+'/partial-strokes.webm');await writeFile(out+'/checks.json',JSON.stringify({kind:'Rendered retargeted grip/club transform and actual head position at 0.24 s release impact, 1.24 s clip time; full/45%/8% strength. Not coach certification.',checks,errors},null,2));await browser.close();

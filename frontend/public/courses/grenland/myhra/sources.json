@@ -116,7 +116,9 @@
     "basis": "Existing owner-account generated assets; paid-user commercial modification and distribution guidance reviewed. This check is not a receipt proving the generation-date subscription.",
     "tripoGuide": "https://www.tripo3d.ai/help/privacy-policy/how-to-use-tripo-models-commercially",
     "polyHavenLicense": "https://polyhaven.com/license",
-    "newThirdPartyAnimations": 0,
+    "newThirdPartyAnimations": 4,
+    "mixamoLicense": "https://helpx.adobe.com/creative-cloud/faq/mixamo-faq.html",
+    "mixamoDistribution": "Embedded game GLBs only; raw owner-downloaded FBX and new working Blend remain local outside the repository.",
     "newCreditSpend": 0
   },
   "authored": [
@@ -140,10 +142,10 @@
         "GolfChip",
         "GolfPutt"
       ],
-      "source": "tools/art/golfer-motions.blend",
+      "source": "Owner-downloaded Adobe Mixamo Golf Drive, Golf Chip and Golf Putt FBX; tools/retarget-mixamo-golf.py and tools/art/golfer-motions.json",
       "impactSeconds": 1.24,
-      "classification": "project-authored baked actions, not professional motion capture",
-      "validation": "48 rendered poses and slow-motion footage reviewed; golf-coach approval pending."
+      "classification": "Mixamo body motions retargeted in Blender, with authored anatomical grip, club-path calibration and foot constraints",
+      "validation": "Front/side/rear pose and slow-motion review, actual club-head contact and partial-stroke parity checks. Professional golf-coach approval pending."
     }
   ]
 }

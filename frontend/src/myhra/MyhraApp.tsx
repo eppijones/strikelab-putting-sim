@@ -24,13 +24,15 @@ const Scene=lazy(()=>import('./MyhraScene'));
 const RoundJournal=lazy(()=>import('./RoundJournal'));
 type View='player'|'overview'|'green';
 type Panel='menu'|'help'|'score'|'bag'|'map'|'journal'|null;
-type Session={kind:'practice'|'what-if';round:SavedHole;start:Vec3;context?:WhatIfContext};
+type Session={kind:'practice'|'what-if';round:SavedHole;start:Vec3;context?:WhatIfContext;wind?:number};
 type PerformanceSample={fps:number;p95:number;p99:number;triangles:number;drawCalls:number};
 const clamp=(n:number,min:number,max:number)=>Math.max(min,Math.min(max,n));
 const scoreValue=(strokes:number,par=4)=>strokes===par?'E':`${strokes>par?'+':''}${strokes-par}`;
 const meters=(v:number)=>v<10?v.toFixed(1):Math.round(v).toString();
 const isTextEntry=(target:EventTarget|null)=>(target as HTMLElement)?.closest('input,select,textarea,a,[contenteditable=true]');
 function initialRound(hole:Hole){try{return restoreHole(hole,localStorage.getItem(SAVE)??localStorage.getItem(LEGACY_SAVE));}catch{return freshHole(hole);}}
+function suggestedClub(hole:Hole,ball:Vec3){const lie=surfaceAt(hole.world,ball[0],ball[2]),d=distance(ball,hole.data.pin);return lie==='green'?13:lie==='bunker'&&d<70?11:d<55?11:d<100?9:d<135?7:d<170?5:d<205?2:0;}
+function suggestedPower(hole:Hole,ball:Vec3){const d=distance(ball,hole.data.pin);return surfaceAt(hole.world,ball[0],ball[2])==='green'?clamp(d/puttRangeMetres(recommendPuttRange(d)),.01,.95):1;}
 
 function MiniMap({hole,ball}:{hole:Hole;ball:Vec3}){
  const point=(p:number[])=>`${(p[0]-290)*.68},${(p[1]-195)*.43}`;
@@ -39,12 +41,13 @@ function MiniMap({hole,ball}:{hole:Hole;ball:Vec3}){
 }
 
 function PlayHole({hole:sourceHole}:{hole:Hole}){
- const [settings,setSettings]=useState(readSettings),[wind,setWind]=useState(0);
- const hole=useMemo(()=>({...sourceHole,world:{...sourceHole.world,wind:[wind,0] as [number,number]}}),[sourceHole,wind]);
+ const [settings,setSettings]=useState(readSettings);
  const [activeRound,setActiveRound]=useState<SavedHole>(()=>initialRound(sourceHole));
  const [session,setSession]=useState<Session|null>(null),round=session?.round??activeRound;
- const [club,setClub]=useState(()=>surfaceAt(hole.world,round.ball[0],round.ball[2])==='green'?13:0);
- const [power,setPower]=useState(1),[aim,setAim]=useState(0),[view,setView]=useState<View>('player');
+ const wind=session?.wind??settings.wind,setWind=useCallback((value:number)=>{if(session)setSession(s=>s?{...s,wind:value}:s);else setSettings(s=>({...s,wind:value}));},[session]);
+ const hole=useMemo(()=>({...sourceHole,world:{...sourceHole.world,wind:[wind,0] as [number,number]}}),[sourceHole,wind]);
+ const [club,setClub]=useState(()=>suggestedClub(hole,round.ball));
+ const [power,setPower]=useState(()=>suggestedPower(hole,round.ball)),[aim,setAim]=useState(0),[view,setView]=useState<View>('player');
  const [shotType,setShotType]=useState<ShotType>('full');
  const [puttRange,setPuttRange]=useState<PuttRange>(()=>recommendPuttRange(distance(round.ball,hole.data.pin)));
  const [shot,setShot]=useState<ShotResult>(),[motion,setMotion]=useState(0),[busy,setBusy]=useState(false),[ready,setReady]=useState(false);
@@ -54,7 +57,7 @@ function PlayHole({hole:sourceHole}:{hole:Hole}){
  const [cartSpeed,setCartSpeed]=useState(0),[cartDistance,setCartDistance]=useState(0),[cartMode,setCartMode]=useState(false);
  const [performanceSample,setPerformanceSample]=useState<PerformanceSample>();
  const [replayFrame,setReplayFrame]=useState<JournalReplayFrame|null>(null);
- const dialog=useRef<HTMLElement>(null),accepted=useRef(false);
+ const dialog=useRef<HTMLElement>(null),accepted=useRef(false),resetRejectedSwing=useRef<()=>void>(()=>{});
  const roundRef=useRef(round),sessionRef=useRef(session);
  const reviewRequired=!!round.needsCourseReview;
  const allowed=ready&&!busy&&!cartMode&&!round.complete&&!panel&&!reviewRequired;
@@ -75,21 +78,28 @@ function PlayHole({hole:sourceHole}:{hole:Hole}){
   worker.postMessage({id:round.strokes,world:hole.world,ball});return()=>worker.terminate();
  },[hole,ball,round.strokes,round.complete,adviceKey]);
  const commit=useCallback((next:SavedHole)=>{
+  if(!sessionRef.current){
+   try{localStorage.setItem(SAVE,JSON.stringify(next));setSaveError('');}
+   catch{setSaveError('Your browser could not save. This shot or change was not accepted; your previous round is safe. Free some browser storage and retry.');return false;}
+  }
   roundRef.current=next;
-  if(sessionRef.current){setSession(s=>s?{...s,round:next}:s);return;}
-  setActiveRound(next);try{localStorage.setItem(SAVE,JSON.stringify(next));setSaveError('');}catch{setSaveError('Your browser could not save this round. Keep this tab open.');}
+  if(sessionRef.current)setSession(s=>s?{...s,round:next}:s);
+  else setActiveRound(next);
+  return true;
  },[]);
  const onStrike=useCallback((strike:Strike)=>{
   if(!allowedRef.current||accepted.current)return;accepted.current=true;
   const {launch,result}=simulateShot(hole.world,ball,{club,power,bearing,puttRange,shotType:club===13?'putt':shotType,friendly:settings.friendly},strike);
   const next=recordHoleShot(hole,roundRef.current,{club:CLUBS[club].name,lie,start:ball,launch,result,friendly:settings.friendly,conditions:{stimp:hole.world.stimp,wind:hole.world.wind}});
   const firstAlternative=!!sessionRef.current?.context&&roundRef.current.strokes===0;
-  commit(next);setShot(result);setMotion(n=>n+1);setBusy(true);setCaddieOpen(false);
+  if(!commit(next)){accepted.current=false;resetRejectedSwing.current();return;}
+  setShot(result);setMotion(n=>n+1);setBusy(true);setCaddieOpen(false);
   setFeedback(`${strike.label} · ${Math.round(strike.power*100)}% strength${Math.abs(strike.face)>.8?` · ${Math.abs(strike.face).toFixed(1)}° ${strike.face<0?'left':'right'}`:''}`);
   if(firstAlternative&&sessionRef.current?.context){try{saveWhatIfResult(sessionRef.current.context,{start:ball,club:CLUBS[club].name,launch,result,courseRevision:courseRevision(hole),conditions:{stimp:hole.world.stimp,wind:hole.world.wind}});}catch{setSaveError('This alternative could not be saved. Your original round is unchanged.');}}
  },[hole,ball,club,power,bearing,puttRange,settings.friendly,lie,commit,shotType]);
  const swing=useSwing(onStrike,allowed,settings.swingMode);
  const {reset:swingReset,cancel:swingCancel,press:swingPress,controllerMove,controller:swingController}=swing;
+ useLayoutEffect(()=>{resetRejectedSwing.current=swingReset;},[swingReset]);
  const inputActive=swing.view.phase!=='ready'&&swing.view.phase!=='finish';
  const livePower=swing.view.phase==='ready'?power:swing.view.phase==='downswing'?swing.view.peak:swing.view.phase==='path'||swing.view.phase==='tempo'?swing.view.lockedPower:swing.view.amount;
  const preview=useMemo(()=>simulateShot(hole.world,ball,{club,power:livePower,bearing,puttRange,shotType:club===13?'putt':shotType,friendly:settings.friendly}).result,[hole,ball,club,livePower,bearing,puttRange,settings.friendly,shotType]);
@@ -100,21 +110,20 @@ function PlayHole({hole:sourceHole}:{hole:Hole}){
  const settled=useCallback(()=>{
   setBusy(false);accepted.current=false;swingReset();setAim(0);
   const r=roundRef.current;if(r.complete){if(settings.sound)golfSound('cup');return;}
-  const d=distance(r.ball,pin),l=surfaceAt(hole.world,r.ball[0],r.ball[2]);
-  setClub(l==='green'?13:d<55?11:d<100?9:d<135?7:d<170?5:d<205?2:0);
-  const range=recommendPuttRange(d);setPuttRange(range);setPower(l==='green'?Math.min(.95,d/puttRangeMetres(range)):1);
+  const d=distance(r.ball,pin);setClub(suggestedClub(hole,r.ball));
+  const range=recommendPuttRange(d);setPuttRange(range);setPower(suggestedPower(hole,r.ball));
  },[hole,pin,settings.sound,swingReset]);
  const sceneReady=useCallback(()=>setReady(true),[]);
  const impact=useCallback(()=>{if(settings.sound)golfSound('hit');},[settings.sound]);
  const aimTo=useCallback((point:Vec3)=>{if(!allowedRef.current||swingController.current.phase!=='ready')return;const a=bearingTo(ball,point)-bearingTo(ball,aimTarget);setAim(Math.atan2(Math.sin(a),Math.cos(a))*180/Math.PI);},[ball,aimTarget,swingController]);
  const openPanel=useCallback((next:Panel)=>{swingCancel();setCaddieOpen(false);setPanel(next);},[swingCancel]);
  const closePanel=useCallback(()=>setPanel(null),[]);
- const restart=()=>{resetPresentation();commit(freshHole(hole));setClub(0);setPower(1);setPanel(null);};
+ const restart=()=>{if(!commit(freshHole(hole)))return;resetPresentation();setClub(0);setPower(1);setPanel(null);};
  const practice=(metres:number)=>{
   resetPresentation();const p:Vec3=metres===70?[365,0,pin[2]+68]:[pin[0],0,pin[2]+metres];p[1]=heightAt(hole.world,p[0],p[2]);
   setSession({kind:'practice',round:{...freshHole(hole),ball:p},start:p});setClub(metres<10?13:11);setPuttRange(recommendPuttRange(metres));setPower(metres===70?.9:metres/6);setPanel(null);
  };
- const returnToRound=()=>{resetPresentation();setSession(null);setWind(0);setClub(surfaceAt(hole.world,activeRound.ball[0],activeRound.ball[2])==='green'?13:0);setPuttRange(recommendPuttRange(distance(activeRound.ball,pin)));setPower(1);};
+ const returnToRound=()=>{resetPresentation();setSession(null);setClub(suggestedClub(hole,activeRound.ball));setPuttRange(recommendPuttRange(distance(activeRound.ball,pin)));setPower(suggestedPower(hole,activeRound.ball));};
  const tryShot=useCallback((position:Vec3,context:WhatIfContext)=>{
   resetPresentation();const p:Vec3=[position[0],heightAt(hole.world,position[0],position[2]),position[2]];
   setSession({kind:'what-if',round:{...freshHole(hole),ball:p},start:p,context});setClub(Math.max(0,CLUBS.findIndex(c=>c.name===context.club)));setPuttRange(recommendPuttRange(distance(p,pin)));setPower(1);setPanel(null);
@@ -194,7 +203,7 @@ function PlayHole({hole:sourceHole}:{hole:Hole}){
    <MyhraSwingControl swing={swing} mode={settings.swingMode} disabled={!allowed} busy={busy} target={power} distance={preview.distance}/>
   </footer>:!cartMode&&<section className="mh-result" aria-label="Hole completed"><span className="mh-eyebrow">{session?'PRACTICE COMPLETE':'MYHRA · HOLE COMPLETE'}</span><h2>{scoreName(round.strokes,hole.data.par)}</h2><p><strong>{round.strokes}</strong> strokes <span>{scoreValue(round.strokes,hole.data.par)}</span></p><button onClick={session?returnToRound:restart}><RotateCcw size={17}/>{session?'Return to saved round':'Play Myhra again'}</button><button className="mh-quiet" onClick={()=>openPanel('score')}>See your shots <ArrowRight size={16}/></button></section>}
   {feedback&&!busy&&!cartMode&&!round.complete&&<div className="mh-shot-recap" role="status"><span>{feedback}</span>{shot&&<small>{meters(shot.distance)} m total · {meters(shot.carry)} m carry{shot.penalty?' · penalty':''}</small>}</div>}
-  {!busy&&!round.complete&&!cartMode&&!panel&&<aside className={`mh-caddie ${caddieOpen?'expanded':'compact'}`} aria-label="Caddie recommendation"><div className="mh-caddie-head"><span><i/> Caddie</span><button aria-label={caddieOpen?'Close caddie details':'Show caddie details'} aria-expanded={caddieOpen} onClick={()=>setCaddieOpen(v=>!v)}>{caddieOpen?<X size={18}/>:<ChevronDown size={18}/>}</button></div>{advice?<><div className="mh-caddie-shot"><b>{CLUBS[advice.club].name}</b><span>{Math.round(advice.power*100)}%</span><span>{meters(advice.club===13?advice.total:advice.carry)} m {advice.club===13?'roll':'carry'}</span></div>{caddieOpen&&<p>{advice.reason}</p>}<button className="mh-use-shot" disabled={!allowed||inputActive} onClick={applyAdvice}>Use this shot <ArrowRight size={16}/></button></>:<p>{guidance?.error?'Choose your club and line.':'Reading the hole…'}</p>}</aside>}
+  {!busy&&!round.complete&&!cartMode&&!panel&&<aside className={`mh-caddie ${caddieOpen?'expanded':'compact'}`} aria-label="Caddie recommendation"><div className="mh-caddie-head"><span><i/> Caddie</span><button aria-label={caddieOpen?'Close caddie details':'Show caddie details'} aria-expanded={caddieOpen} onClick={()=>setCaddieOpen(v=>!v)}>{caddieOpen?<X size={18}/>:<ChevronDown size={18}/>}</button></div>{advice?caddieOpen?<><div className="mh-caddie-shot"><b>{CLUBS[advice.club].name}</b><span>{Math.round(advice.power*100)}%</span><span>{meters(advice.club===13?advice.total:advice.carry)} m {advice.club===13?'roll':'carry'}</span></div><p>{advice.reason}</p><button className="mh-use-shot" disabled={!allowed||inputActive} onClick={applyAdvice}>Use this shot <ArrowRight size={16}/></button></>:<button className="mh-use-shot" aria-label="Use this shot" disabled={!allowed||inputActive} onClick={applyAdvice}><span className="mh-caddie-summary"><b>{CLUBS[advice.club].name}</b><small>{Math.round(advice.power*100)}% · {meters(advice.club===13?advice.total:advice.carry)} m {advice.club===13?'roll':'carry'}</small></span><span className="mh-caddie-apply">Use <ArrowRight size={14}/></span></button>:<p>{guidance?.error?'Choose your club and line.':'Reading the hole…'}</p>}</aside>}
   {cartMode&&<section className="mh-driving" aria-label="Cart controls"><div><span className="mh-eyebrow">Explore Myhra</span><h2><output aria-label="Cart speed">{Math.round(cartSpeed*3.6)}</output><small> km/h</small></h2><p>{Math.round(cartDistance)} m from your ball<br/><span className="mh-desktop-only">WASD / arrows · Shift to boost</span></p></div><button className="drive-boost" aria-label="Toggle boost" aria-pressed={driveBoost} onClick={()=>setDriveBoost(v=>!v)}>Boost {driveBoost?'on':'off'}</button><DriveStick disabled={!!panel} onMove={onDriveTouch}/><button className="mh-use-shot" onClick={toggleCart}>Back to my ball <ArrowRight size={16}/></button></section>}
   {panel==='map'&&<CourseMap current={1} onClose={closePanel}/>}
   {panel==='journal'&&<Suspense fallback={<div className="mh-backdrop"><p>Opening your journal…</p></div>}><RoundJournal hole={hole} onClose={closePanel} onTryShot={tryShot} onReplayFrame={setReplayFrame}/></Suspense>}

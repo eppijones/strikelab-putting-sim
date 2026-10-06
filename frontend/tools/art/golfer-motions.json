@@ -1,13 +1,58 @@
 {
   "actions": [
-    "GolfDriver",
-    "GolfIron",
-    "GolfChip",
-    "GolfPutt"
+    {
+      "family": "Driver",
+      "source": "Golf Drive (1).fbx",
+      "trim_frames": [
+        195,
+        240,
+        253,
+        285
+      ],
+      "max_grip_correction_m": 0.32744425724180787,
+      "max_grip_error_m": 0.005435651807252705
+    },
+    {
+      "family": "Iron",
+      "source": "Golf Drive.fbx",
+      "trim_frames": [
+        1,
+        25,
+        36,
+        65
+      ],
+      "max_grip_correction_m": 0.36540125348433333,
+      "max_grip_error_m": 0.00494772194399191
+    },
+    {
+      "family": "Chip",
+      "source": "Golf Chip (1).fbx",
+      "trim_frames": [
+        8,
+        35,
+        44,
+        52
+      ],
+      "max_grip_correction_m": 0.25906840062948605,
+      "max_grip_error_m": 0.009388829395412997
+    },
+    {
+      "family": "Putt",
+      "source": "Golf Putt.fbx",
+      "trim_frames": [
+        13,
+        31,
+        39,
+        43
+      ],
+      "max_grip_correction_m": 0.15503670471062847,
+      "max_grip_error_m": 0.00793148275969763
+    }
   ],
-  "authored_in": "Blender",
-  "licence": "project-authored on existing owner-generated character",
+  "source": "Owner-downloaded Adobe Mixamo golf FBX files",
+  "retargeted_in": "Blender",
   "fps": 100,
   "impact_seconds": 1.24,
-  "approval": "Pending coach and slow-motion visual review"
+  "license": "Embedded video game use; raw source FBX and working blend not distributed",
+  "approval": "Pending visual and coach review"
 }

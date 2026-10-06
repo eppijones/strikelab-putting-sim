@@ -6,6 +6,7 @@ import {AnimationMixer,Bone,Group,LoopOnce,Matrix4,Mesh,MeshStandardMaterial,Qua
 import {ASSETS} from './data';
 import {clubFrame,golfPose,IMPACT_DELAY} from './golfMotion';
 import type {SwingController} from '../course/swing';
+import {heightAt,surfaceAt,type World} from '../course/engine';
 
 const S=1.86/.982574;
 const v=(x=0,y=0,z=0)=>new Vector3(x,y,z);
@@ -39,7 +40,7 @@ export function GolfClub({putter=false,iron=false}:{putter?:boolean;iron?:boolea
  </group>;
 }
 
-export default function MyhraGolfer({swing,elapsed,club,seated=false,feet,replay=false,shotType='full',high=true}:{swing:MutableRefObject<SwingController>;elapsed:MutableRefObject<number>;club:number;seated?:boolean;feet?:MutableRefObject<[number,number]>;replay?:boolean;shotType?:'full'|'chip'|'pitch'|'putt';high?:boolean}){
+export default function MyhraGolfer({swing,elapsed,club,seated=false,feet,world,replay=false,shotType='full',high=true}:{swing:MutableRefObject<SwingController>;elapsed:MutableRefObject<number>;club:number;seated?:boolean;feet?:MutableRefObject<[number,number]>;world?:World;replay?:boolean;shotType?:'full'|'chip'|'pitch'|'putt';high?:boolean}){
  const phaseMemory=useRef({back:0,transition:0,playing:false});
  const source=useGLTF(ASSETS+(high?'golfer-motions.glb':'golfer-motions-mobile.glb')),grip=useRef<Group>(null);
  const rig=useMemo(()=>{
@@ -61,10 +62,15 @@ export default function MyhraGolfer({swing,elapsed,club,seated=false,feet,replay
   scene.updateMatrixWorld(true);
   for(const side of ['Left','Right']){const hand=bones[side+'Hand'],center=v();for(const name of ['Middle1','Middle3','Middle4','Ring1','Ring3','Ring4'])center.add(hand.worldToLocal(bones[side+'Hand'+name].getWorldPosition(v())));gripCenters[side]=center.multiplyScalar(1/6);}
   const mixer=new AnimationMixer(scene),actions=Object.fromEntries(source.animations.filter(a=>a.name.startsWith('Golf')).map(clip=>{const base=clip.clone();base.name+='Address';const action=mixer.clipAction(clip),address=mixer.clipAction(base);for(const a of [action,address]){a.setLoop(LoopOnce,1);a.clampWhenFinished=true;a.paused=true;a.play();}return [clip.name,{action,address,duration:clip.duration}];}));
-  return {scene,bones,rest,grips,calibration,gripCenters,mixer,actions,anchor:scene.getObjectByName('GolfClubAnchor')};
+  return {scene,bones,rest,grips,calibration,gripCenters,gripSampled:false,mixer,actions,anchor:scene.getObjectByName('GolfClubAnchor'),groundBase:new Map<Bone,{quaternion:Quaternion;position:Vector3}>()};
  },[source.scene,source.animations]);
  const mutableRig=useRef(rig);useLayoutEffect(()=>{mutableRig.current=rig;},[rig]);
- useEffect(()=>()=>{rig.mixer.stopAllAction();rig.scene.traverse(o=>{if(o instanceof Mesh){const materials=Array.isArray(o.material)?o.material:[o.material];materials.forEach(m=>m.dispose());}});},[rig]);
+ useEffect(()=>{
+  // React development remounts run cleanup/setup on the same memoized rig.
+  // Re-register both paused actions after cleanup stopped the mixer.
+  for(const tracks of Object.values(rig.actions)){tracks.action.play();tracks.address.play();}
+  return()=>{rig.mixer.stopAllAction();rig.scene.traverse(o=>{if(o instanceof Mesh){const materials=Array.isArray(o.material)?o.material:[o.material];materials.forEach(m=>m.dispose());}});};
+ },[rig]);
  useFrame(()=>{
   const rig=mutableRig.current,{scene,bones,rest}=rig,s=swing.current,t=elapsed.current,putt=club===13;
   // AnimationMixer owns baked bones. Resetting them outside the mixer would
@@ -93,18 +99,58 @@ export default function MyhraGolfer({swing,elapsed,club,seated=false,feet,replay
   if(authored&&rig.anchor){
    for(const [name,tracks] of Object.entries(rig.actions)){tracks.action.enabled=name===family;tracks.address.enabled=name===family;}
    const strength=replay?1:Math.max(.01,memory.transition),impactTime=1+IMPACT_DELAY;
-   // A partial backswing blends address/top, but every downswing reaches the
-   // same square contact pose. Scaling the impact pose left weak putts short
-   // of the ball. Retiming the follow-through keeps a shorter stroke natural.
-   const weight=t<0?back:t<IMPACT_DELAY?strength+(1-strength)*smooth(t/IMPACT_DELAY):1;
-   authored.action.time=t<0?1:t<IMPACT_DELAY?1+t:impactTime+Math.min(Math.max(0,t-IMPACT_DELAY),authored.duration-impactTime)*strength;
-   authored.action.weight=weight;authored.address.time=0;authored.address.weight=1-weight;
-   rig.mixer.update(0);scene.updateWorldMatrix(true,true);
-   // Only ground contact is corrected after the baked action. Club and body
-   // timing come from the same authored animation, including the impact frame.
-   // Terrain correction is applied to the scene, so repeated paused frames
-   // cannot accumulate an IK offset in bones owned by AnimationMixer.
-   scene.position.y=feet?Math.min(...feet.current):0;
+   // Scrub the captured takeaway during input. Blending only address and top
+   // skipped its real wrist/shaft path and could sweep the club through the body.
+   // Short strokes return from their actual selected top into the same impact
+   // pose; full strokes use the retargeted downswing. The event stays identical.
+   if(t<0){authored.action.time=back;authored.action.weight=1;authored.address.weight=0;}
+   else if(t<IMPACT_DELAY&&strength<.98){const contact=smooth(t/IMPACT_DELAY);authored.action.time=strength*(1-contact);authored.action.weight=1-contact;authored.address.time=impactTime;authored.address.weight=contact;}
+   else {authored.action.time=t<IMPACT_DELAY?1+t:impactTime+Math.min(Math.max(0,t-IMPACT_DELAY),authored.duration-impactTime)*strength;authored.action.weight=1;authored.address.weight=0;}
+   // Restore the previous uncorrected leg pose before the mixer samples. A
+   // paused action can cache its values, so IK must not accumulate each frame.
+   for(const [bone,pose] of rig.groundBase){bone.quaternion.copy(pose.quaternion);bone.position.copy(pose.position);}
+   scene.position.y=0;rig.mixer.update(0);scene.updateWorldMatrix(true,true);
+   // Sample the authored closed fingers, rather than the open bind-pose hand.
+   // Body interpolation and the different avatar proportions can otherwise
+   // leave the trail hand a few centimetres off the independently baked club.
+   if(!rig.gripSampled){for(const side of ['Left','Right']){const hand=bones[side+'Hand'],centre=v();for(const suffix of ['Middle1','Middle3','Middle4','Ring1','Ring3','Ring4'])centre.add(hand.worldToLocal(bones[side+'Hand'+suffix].getWorldPosition(v())));rig.gripCenters[side].copy(centre.multiplyScalar(1/6));}rig.gripSampled=true;}
+   const clubOrigin=rig.anchor.getWorldPosition(v()),clubShaft=v(0,-1,0).applyQuaternion(rig.anchor.getWorldQuaternion(new Quaternion()));
+   // Correct each foot independently. Lowering the entire body to the lower
+   // foot buried the uphill shoe and also moved the club below the ball.
+   const baseY=scene.getWorldPosition(v()).y,goals=new Map<string,Vector3>(),hands=new Map<string,{position:Vector3;quaternion:Quaternion}>();let stanceHeight=0;
+   for(const name of ['Hips','LeftUpLeg','LeftLeg','RightUpLeg','RightLeg','LeftArm','LeftForeArm','LeftHand','RightArm','RightForeArm','RightHand']){const bone=bones[name];let pose=rig.groundBase.get(bone);if(!pose){pose={quaternion:new Quaternion(),position:v()};rig.groundBase.set(bone,pose);}pose.quaternion.copy(bone.quaternion);pose.position.copy(bone.position);}
+   for(const side of ['Left','Right']){
+    const foot=bones[side+'Foot'],hand=bones[side+'Hand'],target=foot.getWorldPosition(v());
+    const heel=Math.max(0,target.y-baseY-.115);
+    const ground=world?heightAt(world,target.x,target.z):baseY+(feet?.current[side==='Left'?0:1]??0);stanceHeight+=(ground-baseY)*.5;target.y=ground+.115+heel;
+    const handPosition=hand.getWorldPosition(v()),centre=hand.localToWorld(rig.gripCenters[side].clone()),desired=clubOrigin.clone().addScaledVector(clubShaft,side==='Left'?.055:.120);
+    goals.set(side,target);hands.set(side,{position:handPosition.add(desired.sub(centre)),quaternion:hand.getWorldQuaternion(new Quaternion())});
+   }
+   // On a steep bank, a slightly closer stance reduces the ball-above-feet
+   // difference. Preserve the shot anchor and reject water/out-of-bounds feet.
+   const offset=v();
+   if(world&&stanceHeight<-.25){
+    const candidate=v(0,0,.28).applyQuaternion(rootQ),changes=Array.from(goals.values()).map(goal=>({goal,ground:heightAt(world,goal.x+candidate.x,goal.z+candidate.z),previous:heightAt(world,goal.x,goal.z),lie:surfaceAt(world,goal.x+candidate.x,goal.z+candidate.z)}));
+    const improved=stanceHeight+changes.reduce((sum,c)=>sum+(c.ground-c.previous)*.5,0);
+    if(Math.abs(improved)<Math.abs(stanceHeight)&&changes.every(c=>c.lie!=='water'&&c.lie!=='out')){offset.copy(candidate);stanceHeight=improved;for(const c of changes){c.goal.add(candidate);c.goal.y+=c.ground-c.previous;}}
+   }
+   // The hips follow the stance height so a downhill foot remains reachable.
+   // Hands return to the baked grip; the independent club anchor never moves.
+   // Uphill feet bend the knees rather than lifting the shoulders away from
+   // the grip. Downhill feet require lowering the hips to stay in leg reach.
+   const shift=Math.max(-.5,Math.min(0,stanceHeight));
+   const hips=bones.Hips,hipTarget=hips.getWorldPosition(v()).add(offset);hipTarget.y+=shift;hips.position.copy(hips.parent!.worldToLocal(hipTarget));scene.updateWorldMatrix(true,true);
+   for(const side of ['Left','Right']){
+    const upper=bones[side+'UpLeg'],lower=bones[side+'Leg'],foot=bones[side+'Foot'],hand=bones[side+'Hand'],goal=hands.get(side)!;
+    limb(upper,lower,foot,goals.get(side)!,lower.getWorldPosition(v()));
+    limb(bones[side+'Arm'],bones[side+'ForeArm'],hand,goal.position,bones[side+'ForeArm'].getWorldPosition(v()));
+    hand.quaternion.copy(hand.parent!.getWorldQuaternion(new Quaternion()).invert().multiply(goal.quaternion));hand.updateWorldMatrix(false,true);
+    // Finish the tiny wrist translation when avatar reach or interpolated
+    // nonuniform bone scale prevents the two-bone solve reaching the grip.
+    hand.position.copy(hand.parent!.worldToLocal(goal.position.clone()));hand.updateWorldMatrix(false,true);
+    const desired=clubOrigin.clone().addScaledVector(clubShaft,side==='Left'?.055:.120),correction=desired.sub(hand.localToWorld(rig.gripCenters[side].clone()));
+    hand.position.copy(hand.parent!.worldToLocal(hand.getWorldPosition(v()).add(correction)));hand.updateWorldMatrix(false,true);
+   }
    if(grip.current){grip.current.position.copy(grip.current.parent!.worldToLocal(rig.anchor.getWorldPosition(v())));grip.current.quaternion.copy(grip.current.parent!.getWorldQuaternion(new Quaternion()).invert().multiply(rig.anchor.getWorldQuaternion(new Quaternion())));}
    return;
   }
