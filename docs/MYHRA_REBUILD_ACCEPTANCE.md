@@ -2,7 +2,7 @@
 
 7 October 2026 release check (implementation and final automated session completed 6 October; work began 5 October). Branch `codex/grenland-finished-hole`, based on `128fdff`. Gameplay code commit: `17df1398bcd8c6a96ea0ac6ff4ada8c8b59b001e`; reviewed production build cache: `d5c8a196ac7178d4`. Production remains unchanged until release acceptance passes. This is a working implementation for review; **the complete finished-quality milestone has not yet passed**.
 
-[Play the deployed preview](https://grenland-golf-qqyxh3wj0-strikelabs-projects-8daa3b0e.vercel.app/play/grenland/myhra). Vercel's deployment dashboard reports **Ready** for `17df139`. The hosted game has not been inspected: automatic browser approval rejected access to this new preview URL because permission was declined. Local production-build results below remain valid; they do not substitute for a hosted smoke check. Vercel's existing preview sign-in protection remains enabled.
+[Play the deployed preview](https://grenland-golf-qqyxh3wj0-strikelabs-projects-8daa3b0e.vercel.app/play/grenland/myhra). Vercel's deployment dashboard reports **Ready** for `17df139`. The hosted game has not been inspected: access was initially declined; the owner subsequently authorized verification on 7 October, but automatic browser approval still rejected it because a saved browser permission blocks this domain. Local production-build results below remain valid; they do not substitute for a hosted smoke check. Vercel's existing preview sign-in protection remains enabled.
 
 ## What is implemented
 
@@ -23,7 +23,7 @@
 | --- | --- | --- |
 | TypeScript and production build | PASS | Vite build; expected large Three.js chunk warning. |
 | Vercel preview build | PASS, deployment status | Dashboard reports Ready for gameplay commit `17df139`. Production remains at `128fdff`. |
-| Hosted gameplay smoke check | UNTESTED, browser permission blocked | New-preview browser access was declined. Local production-build gameplay has been checked; CDN delivery and signed-in hosted interaction have not. |
+| Hosted gameplay smoke check | UNTESTED, saved browser permission blocked | The owner authorized verification, but the browser still rejects this domain due to a saved permission setting. Local production-build gameplay has been checked; CDN delivery and signed-in hosted interaction have not. |
 | Frontend test suite | PASS | 66 tests: swing, physics, cup/surfaces/penalties, saves, journal, contracts and cart. |
 | Changed production-source lint | PASS | Scoped ESLint. Repository-wide lint still has unrelated existing lab errors. |
 | Tee → approach → putt → score → reload | PASS, automated | Real UI/caddie/touch loop; three strokes in the fixture. `rebuild/golf-loop.json`. This is completion evidence, not realistic scoring difficulty. |
