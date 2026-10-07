@@ -1,0 +1,292 @@
+{
+  "passed": true,
+  "url": "http://127.0.0.1:4175/play/grenland/myhra",
+  "buildScripts": [
+    "http://127.0.0.1:4175/assets/index-BLmFVjxE.js"
+  ],
+  "completedAt": "2026-10-06T07:08:58.850Z",
+  "kind": "20-minute Chrome headless mixed session, mobile viewport on available PC; not physical iPhone or DualSense",
+  "elapsedSeconds": 1210.484,
+  "frames": 140985,
+  "p95Ms": 8.400000000023283,
+  "p99Ms": 8.5,
+  "activities": [
+    {
+      "seconds": 17,
+      "action": "putting"
+    },
+    {
+      "seconds": 39,
+      "action": "driving"
+    },
+    {
+      "seconds": 54,
+      "action": "replay"
+    },
+    {
+      "seconds": 71,
+      "action": "putting"
+    },
+    {
+      "seconds": 93,
+      "action": "driving"
+    },
+    {
+      "seconds": 108,
+      "action": "replay"
+    },
+    {
+      "seconds": 125,
+      "action": "putting"
+    },
+    {
+      "seconds": 146,
+      "action": "driving"
+    },
+    {
+      "seconds": 161,
+      "action": "replay"
+    },
+    {
+      "seconds": 178,
+      "action": "putting"
+    },
+    {
+      "seconds": 199,
+      "action": "driving"
+    },
+    {
+      "seconds": 214,
+      "action": "replay"
+    },
+    {
+      "seconds": 231,
+      "action": "putting"
+    },
+    {
+      "seconds": 252,
+      "action": "driving"
+    },
+    {
+      "seconds": 267,
+      "action": "replay"
+    },
+    {
+      "seconds": 284,
+      "action": "putting"
+    },
+    {
+      "seconds": 304,
+      "action": "driving"
+    },
+    {
+      "seconds": 320,
+      "action": "replay"
+    },
+    {
+      "seconds": 337,
+      "action": "putting"
+    },
+    {
+      "seconds": 358,
+      "action": "driving"
+    },
+    {
+      "seconds": 373,
+      "action": "replay"
+    },
+    {
+      "seconds": 390,
+      "action": "putting"
+    },
+    {
+      "seconds": 411,
+      "action": "driving"
+    },
+    {
+      "seconds": 426,
+      "action": "replay"
+    },
+    {
+      "seconds": 442,
+      "action": "putting"
+    },
+    {
+      "seconds": 463,
+      "action": "driving"
+    },
+    {
+      "seconds": 478,
+      "action": "replay"
+    },
+    {
+      "seconds": 495,
+      "action": "putting"
+    },
+    {
+      "seconds": 515,
+      "action": "driving"
+    },
+    {
+      "seconds": 531,
+      "action": "replay"
+    },
+    {
+      "seconds": 547,
+      "action": "putting"
+    },
+    {
+      "seconds": 568,
+      "action": "driving"
+    },
+    {
+      "seconds": 583,
+      "action": "replay"
+    },
+    {
+      "seconds": 599,
+      "action": "putting"
+    },
+    {
+      "seconds": 620,
+      "action": "driving"
+    },
+    {
+      "seconds": 635,
+      "action": "replay"
+    },
+    {
+      "seconds": 651,
+      "action": "putting"
+    },
+    {
+      "seconds": 672,
+      "action": "driving"
+    },
+    {
+      "seconds": 687,
+      "action": "replay"
+    },
+    {
+      "seconds": 703,
+      "action": "putting"
+    },
+    {
+      "seconds": 724,
+      "action": "driving"
+    },
+    {
+      "seconds": 739,
+      "action": "replay"
+    },
+    {
+      "seconds": 756,
+      "action": "putting"
+    },
+    {
+      "seconds": 777,
+      "action": "driving"
+    },
+    {
+      "seconds": 792,
+      "action": "replay"
+    },
+    {
+      "seconds": 808,
+      "action": "putting"
+    },
+    {
+      "seconds": 829,
+      "action": "driving"
+    },
+    {
+      "seconds": 844,
+      "action": "replay"
+    },
+    {
+      "seconds": 860,
+      "action": "putting"
+    },
+    {
+      "seconds": 881,
+      "action": "driving"
+    },
+    {
+      "seconds": 896,
+      "action": "replay"
+    },
+    {
+      "seconds": 913,
+      "action": "putting"
+    },
+    {
+      "seconds": 934,
+      "action": "driving"
+    },
+    {
+      "seconds": 949,
+      "action": "replay"
+    },
+    {
+      "seconds": 965,
+      "action": "putting"
+    },
+    {
+      "seconds": 986,
+      "action": "driving"
+    },
+    {
+      "seconds": 1001,
+      "action": "replay"
+    },
+    {
+      "seconds": 1017,
+      "action": "putting"
+    },
+    {
+      "seconds": 1038,
+      "action": "driving"
+    },
+    {
+      "seconds": 1053,
+      "action": "replay"
+    },
+    {
+      "seconds": 1069,
+      "action": "putting"
+    },
+    {
+      "seconds": 1090,
+      "action": "driving"
+    },
+    {
+      "seconds": 1105,
+      "action": "replay"
+    },
+    {
+      "seconds": 1122,
+      "action": "putting"
+    },
+    {
+      "seconds": 1142,
+      "action": "driving"
+    },
+    {
+      "seconds": 1158,
+      "action": "replay"
+    },
+    {
+      "seconds": 1174,
+      "action": "putting"
+    },
+    {
+      "seconds": 1195,
+      "action": "driving"
+    },
+    {
+      "seconds": 1210,
+      "action": "replay"
+    }
+  ],
+  "errors": []
+}

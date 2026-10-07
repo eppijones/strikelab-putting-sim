@@ -1,5 +1,5 @@
 {
-  "url": "http://127.0.0.1:5175/play/grenland/myhra",
+  "url": "http://127.0.0.1:4175/play/grenland/myhra",
   "kind": "Automated browser checks, synthetic interruption and injected controller events; no physical-device claims",
   "checks": [
     {

@@ -1,0 +1,130 @@
+{
+  "kind": "Chrome headless DOM-input event to next rendered power value and stable projected-distance DOM. Does not measure touch-glass, Bluetooth, display scanout or physical-device latency.",
+  "url": "http://127.0.0.1:4175/play/grenland/myhra",
+  "responseP95Ms": 12.599999994039536,
+  "responseMaxMs": 13,
+  "predictionP95Ms": 24.599999994039536,
+  "predictionMaxMs": 30.700000017881393,
+  "samples": [
+    {
+      "responseMs": 8.800000011920929,
+      "predictionSettledMs": 23.5,
+      "value": 35,
+      "projected": "2.1 m"
+    },
+    {
+      "responseMs": 8.400000005960464,
+      "predictionSettledMs": 30.700000017881393,
+      "value": 70,
+      "projected": "4.1 m"
+    },
+    {
+      "responseMs": 7.800000011920929,
+      "predictionSettledMs": 23.200000017881393,
+      "value": 35,
+      "projected": "2.1 m"
+    },
+    {
+      "responseMs": 7.0999999940395355,
+      "predictionSettledMs": 22.099999994039536,
+      "value": 70,
+      "projected": "4.1 m"
+    },
+    {
+      "responseMs": 6.800000011920929,
+      "predictionSettledMs": 21.5,
+      "value": 35,
+      "projected": "2.1 m"
+    },
+    {
+      "responseMs": 8.399999976158142,
+      "predictionSettledMs": 23.599999994039536,
+      "value": 70,
+      "projected": "4.1 m"
+    },
+    {
+      "responseMs": 6.0999999940395355,
+      "predictionSettledMs": 20.700000017881393,
+      "value": 35,
+      "projected": "2.1 m"
+    },
+    {
+      "responseMs": 13,
+      "predictionSettledMs": 23.5,
+      "value": 70,
+      "projected": "4.1 m"
+    },
+    {
+      "responseMs": 5.5999999940395355,
+      "predictionSettledMs": 21.899999976158142,
+      "value": 35,
+      "projected": "2.1 m"
+    },
+    {
+      "responseMs": 8.299999982118607,
+      "predictionSettledMs": 22.799999982118607,
+      "value": 70,
+      "projected": "4.1 m"
+    },
+    {
+      "responseMs": 11.800000011920929,
+      "predictionSettledMs": 22.700000017881393,
+      "value": 35,
+      "projected": "2.1 m"
+    },
+    {
+      "responseMs": 5.800000011920929,
+      "predictionSettledMs": 19.400000005960464,
+      "value": 70,
+      "projected": "4.1 m"
+    },
+    {
+      "responseMs": 11.599999994039536,
+      "predictionSettledMs": 23.299999982118607,
+      "value": 35,
+      "projected": "2.1 m"
+    },
+    {
+      "responseMs": 11.799999982118607,
+      "predictionSettledMs": 23.5,
+      "value": 70,
+      "projected": "4.1 m"
+    },
+    {
+      "responseMs": 12.299999982118607,
+      "predictionSettledMs": 24.299999982118607,
+      "value": 35,
+      "projected": "2.1 m"
+    },
+    {
+      "responseMs": 6,
+      "predictionSettledMs": 19,
+      "value": 70,
+      "projected": "4.1 m"
+    },
+    {
+      "responseMs": 12.5,
+      "predictionSettledMs": 23.700000017881393,
+      "value": 35,
+      "projected": "2.1 m"
+    },
+    {
+      "responseMs": 5.5,
+      "predictionSettledMs": 19.599999994039536,
+      "value": 70,
+      "projected": "4.1 m"
+    },
+    {
+      "responseMs": 5.4000000059604645,
+      "predictionSettledMs": 19.69999998807907,
+      "value": 35,
+      "projected": "2.1 m"
+    },
+    {
+      "responseMs": 12.599999994039536,
+      "predictionSettledMs": 24.599999994039536,
+      "value": 70,
+      "projected": "4.1 m"
+    }
+  ]
+}

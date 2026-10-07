@@ -1,0 +1,66 @@
+{
+  "url": "http://127.0.0.1:4175/play/grenland/myhra",
+  "kind": "Authored QA fixtures, desktop Chrome, screenshots and moving-camera footage. Not surveyed course evidence or physical-device acceptance.",
+  "passed": true,
+  "checks": [
+    {
+      "view": "approach",
+      "position": [
+        355,
+        4.793898741404216,
+        374
+      ],
+      "lie": "fairway",
+      "provenance": "authored QA fixture"
+    },
+    {
+      "view": "bunker",
+      "position": [
+        365.67,
+        4.123792300224305,
+        343.5
+      ],
+      "lie": "bunker",
+      "provenance": "authored QA fixture"
+    },
+    {
+      "name": "Bunker stroke plays and saves through UI",
+      "passed": true,
+      "distance": 20.58321617739996,
+      "end": [
+        370.7459258645799,
+        3.3418287257515913,
+        323.5524747193325
+      ]
+    },
+    {
+      "view": "greenside-water",
+      "position": [
+        414,
+        1.9788788557052612,
+        269
+      ],
+      "lie": "rough",
+      "provenance": "authored QA fixture"
+    },
+    {
+      "name": "Water relief counts shot and penalty once, preserves ground position on reload",
+      "passed": true
+    },
+    {
+      "view": "putting",
+      "position": [
+        384,
+        2.55957658290863,
+        245.33
+      ],
+      "lie": "green",
+      "provenance": "authored QA fixture"
+    },
+    {
+      "name": "No runtime errors during view transitions",
+      "passed": true
+    }
+  ],
+  "errors": []
+}

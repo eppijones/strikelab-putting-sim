@@ -1,6 +1,8 @@
 # Myhra rebuild — review preview
 
-6 October 2026 (work began 5 October). Branch `codex/grenland-finished-hole`, based on `128fdff`. Reviewed production build cache: `d5c8a196ac7178d4`. Production remains unchanged until release acceptance passes. This is a working implementation for review; **the complete finished-quality milestone has not yet passed**.
+7 October 2026 release check (implementation and final automated session completed 6 October; work began 5 October). Branch `codex/grenland-finished-hole`, based on `128fdff`. Gameplay code commit: `17df1398bcd8c6a96ea0ac6ff4ada8c8b59b001e`; reviewed production build cache: `d5c8a196ac7178d4`. Production remains unchanged until release acceptance passes. This is a working implementation for review; **the complete finished-quality milestone has not yet passed**.
+
+[Play the deployed preview](https://grenland-golf-qqyxh3wj0-strikelabs-projects-8daa3b0e.vercel.app/play/grenland/myhra). Vercel's deployment dashboard reports **Ready** for `17df139`. The hosted game has not been inspected: automatic browser approval rejected access to this new preview URL because permission was declined. Local production-build results below remain valid; they do not substitute for a hosted smoke check. Vercel's existing preview sign-in protection remains enabled.
 
 ## What is implemented
 
@@ -20,6 +22,8 @@
 | Gate | Status | Evidence and limits |
 | --- | --- | --- |
 | TypeScript and production build | PASS | Vite build; expected large Three.js chunk warning. |
+| Vercel preview build | PASS, deployment status | Dashboard reports Ready for gameplay commit `17df139`. Production remains at `128fdff`. |
+| Hosted gameplay smoke check | UNTESTED, browser permission blocked | New-preview browser access was declined. Local production-build gameplay has been checked; CDN delivery and signed-in hosted interaction have not. |
 | Frontend test suite | PASS | 66 tests: swing, physics, cup/surfaces/penalties, saves, journal, contracts and cart. |
 | Changed production-source lint | PASS | Scoped ESLint. Repository-wide lint still has unrelated existing lab errors. |
 | Tee → approach → putt → score → reload | PASS, automated | Real UI/caddie/touch loop; three strokes in the fixture. `rebuild/golf-loop.json`. This is completion evidence, not realistic scoring difficulty. |
@@ -39,7 +43,7 @@
 | Cold playable load | PASS, emulated sample | 7.305 s at 20 Mbps / 80 ms, cold cache with service workers blocked; 9,673,722 bytes at readiness. `rebuild/load-measurement.json`. Local preview, not a measured physical device or Vercel CDN result. |
 | Mobile working geometry budget | PASS, sampled tee | 333k visible triangles, 29 draw calls on balanced tier. Frame time, scenery position and real-device results govern final acceptance. |
 | Texture residency | UNMEASURED | Approximate cold balanced-tier allocation around 126 MB; no physical GPU residency trace. Tier changes can retain previously loaded textures. |
-| 20-minute mixed-play browser session | See `rebuild/soak.json` | Putting, driving, replay, preserved unfinished round and runtime errors. Browser RAF timings on the available PC are not physical mobile acceptance. |
+| 20-minute mixed-play browser session | PASS, automated | 1,210.5 seconds, 69 activities, no runtime errors and no changes to the unfinished active round during separate practice/replay. Browser RAF p95 8.4 ms / p99 8.5 ms, 140,985 frames. `rebuild/soak.json` identifies the tested final bundle. Available-PC headless timings are not physical mobile acceptance. |
 | Visual authenticity and moving-camera approval | PENDING | Tee/corridor references considered; 2024 green/pond changes documented. Exact boundaries, pond dimensions and green contours are not surveyed or club-approved. |
 | iPhone 15 Pro / iPhone 11 | UNTESTED | Physical portrait/landscape frame-time, thermal behaviour, input latency and OS backgrounding. |
 | Actual DualSense | UNTESTED | USB/Bluetooth controls, disconnect/reconnect and stick feel. Injected events do not count. |
@@ -66,4 +70,4 @@ From `frontend`, run `npm test`, `npm run build`, and scoped ESLint on changed p
 
 The original checkout, unrelated local changes and production deployment are preserved. A Vercel preview uses a different origin, so browser-local production saves will not appear there automatically; journal JSON can be exported and imported as copies. Vercel's existing preview protection remains enabled: signed-in Chrome can open it, while an unauthenticated isolated browser reaches the Vercel login page. Public release remains gated by the acceptance matrix.
 
-Before/after browser footage is in `rebuild/comparison/index.html`: the baseline is a production build from a Git archive of `128fdff`; both scenes use a fresh phone-sized viewport. The original motion footage covers full strokes, while `rebuild/impact/partial-strokes.webm` captures the final partial-swing correction.
+Before/after browser footage is in `rebuild/comparison/index.html`: the baseline is a production build from a Git archive of `128fdff`; both scenes use a fresh phone-sized viewport. The full-action footage includes the final captured takeaway and runtime grip correction; `rebuild/impact/partial-strokes.webm` covers the three tested strength levels.

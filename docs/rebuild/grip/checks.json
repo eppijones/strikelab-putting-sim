@@ -1,0 +1,197 @@
+{
+  "kind": "Rendered authored finger-centre/shaft and anatomical index/pinky orientation checks throughout captured takeaway, release and follow-through. 25mm centre tolerance, not coach certification.",
+  "checks": [
+    {
+      "quality": "high",
+      "family": "driver",
+      "power": 1,
+      "maxRadialGapMetres": 0.00002681412483234749,
+      "maxAcrossDot": -0.8327490522183401,
+      "passed": true
+    },
+    {
+      "quality": "high",
+      "family": "driver",
+      "power": 0.45,
+      "maxRadialGapMetres": 0.000021196077422613708,
+      "maxAcrossDot": -0.8391921773152881,
+      "passed": true
+    },
+    {
+      "quality": "high",
+      "family": "driver",
+      "power": 0.08,
+      "maxRadialGapMetres": 2.2812650937430355e-9,
+      "maxAcrossDot": -0.916615028769045,
+      "passed": true
+    },
+    {
+      "quality": "high",
+      "family": "iron",
+      "power": 1,
+      "maxRadialGapMetres": 0.000020075994459284282,
+      "maxAcrossDot": -0.8654245778552728,
+      "passed": true
+    },
+    {
+      "quality": "high",
+      "family": "iron",
+      "power": 0.45,
+      "maxRadialGapMetres": 0.00002119607750445543,
+      "maxAcrossDot": -0.8336888081133457,
+      "passed": true
+    },
+    {
+      "quality": "high",
+      "family": "iron",
+      "power": 0.08,
+      "maxRadialGapMetres": 0.0000034630167672063665,
+      "maxAcrossDot": -0.9225126752473506,
+      "passed": true
+    },
+    {
+      "quality": "high",
+      "family": "chip",
+      "power": 1,
+      "maxRadialGapMetres": 0.000014330482616719212,
+      "maxAcrossDot": -0.9144539617867231,
+      "passed": true
+    },
+    {
+      "quality": "high",
+      "family": "chip",
+      "power": 0.45,
+      "maxRadialGapMetres": 1.862645149230957e-9,
+      "maxAcrossDot": -0.8053063150035499,
+      "passed": true
+    },
+    {
+      "quality": "high",
+      "family": "chip",
+      "power": 0.08,
+      "maxRadialGapMetres": 1.862645149230957e-9,
+      "maxAcrossDot": -0.9152492048059097,
+      "passed": true
+    },
+    {
+      "quality": "high",
+      "family": "putt",
+      "power": 1,
+      "maxRadialGapMetres": 2.634178031930877e-9,
+      "maxAcrossDot": -0.9250944195726402,
+      "passed": true
+    },
+    {
+      "quality": "high",
+      "family": "putt",
+      "power": 0.45,
+      "maxRadialGapMetres": 1.862645149230957e-9,
+      "maxAcrossDot": -0.9256170042077956,
+      "passed": true
+    },
+    {
+      "quality": "high",
+      "family": "putt",
+      "power": 0.08,
+      "maxRadialGapMetres": 1.862645149230957e-9,
+      "maxAcrossDot": -0.9257532113294922,
+      "passed": true
+    },
+    {
+      "quality": "mobile",
+      "family": "driver",
+      "power": 1,
+      "maxRadialGapMetres": 0.00002681412483234749,
+      "maxAcrossDot": -0.8327490522183401,
+      "passed": true
+    },
+    {
+      "quality": "mobile",
+      "family": "driver",
+      "power": 0.45,
+      "maxRadialGapMetres": 0.000021196077422613708,
+      "maxAcrossDot": -0.8391921773152881,
+      "passed": true
+    },
+    {
+      "quality": "mobile",
+      "family": "driver",
+      "power": 0.08,
+      "maxRadialGapMetres": 2.2812650937430355e-9,
+      "maxAcrossDot": -0.916615028769045,
+      "passed": true
+    },
+    {
+      "quality": "mobile",
+      "family": "iron",
+      "power": 1,
+      "maxRadialGapMetres": 0.000020075994459284282,
+      "maxAcrossDot": -0.8654245778552728,
+      "passed": true
+    },
+    {
+      "quality": "mobile",
+      "family": "iron",
+      "power": 0.45,
+      "maxRadialGapMetres": 0.00002119607750445543,
+      "maxAcrossDot": -0.8336888081133457,
+      "passed": true
+    },
+    {
+      "quality": "mobile",
+      "family": "iron",
+      "power": 0.08,
+      "maxRadialGapMetres": 0.0000034630167672063665,
+      "maxAcrossDot": -0.9225126752473506,
+      "passed": true
+    },
+    {
+      "quality": "mobile",
+      "family": "chip",
+      "power": 1,
+      "maxRadialGapMetres": 0.000014330482616719212,
+      "maxAcrossDot": -0.9144539617867231,
+      "passed": true
+    },
+    {
+      "quality": "mobile",
+      "family": "chip",
+      "power": 0.45,
+      "maxRadialGapMetres": 1.862645149230957e-9,
+      "maxAcrossDot": -0.8053063150035499,
+      "passed": true
+    },
+    {
+      "quality": "mobile",
+      "family": "chip",
+      "power": 0.08,
+      "maxRadialGapMetres": 1.862645149230957e-9,
+      "maxAcrossDot": -0.9152492048059097,
+      "passed": true
+    },
+    {
+      "quality": "mobile",
+      "family": "putt",
+      "power": 1,
+      "maxRadialGapMetres": 2.634178031930877e-9,
+      "maxAcrossDot": -0.9250944195726402,
+      "passed": true
+    },
+    {
+      "quality": "mobile",
+      "family": "putt",
+      "power": 0.45,
+      "maxRadialGapMetres": 1.862645149230957e-9,
+      "maxAcrossDot": -0.9256170042077956,
+      "passed": true
+    },
+    {
+      "quality": "mobile",
+      "family": "putt",
+      "power": 0.08,
+      "maxRadialGapMetres": 1.862645149230957e-9,
+      "maxAcrossDot": -0.9257532113294922,
+      "passed": true
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+{
+  "kind": "Rendered bone/contact and grip checks on authored ±30% planes. Does not certify shoe mesh deformation or professional technique.",
+  "checks": [
+    {
+      "family": "driver",
+      "slope": 0,
+      "maxFootErrorMetres": 3.810165207646099e-7,
+      "pausedDriftMetres": 0,
+      "passed": true
+    },
+    {
+      "family": "driver",
+      "slope": 0.3,
+      "maxFootErrorMetres": 4.088515984379537e-7,
+      "pausedDriftMetres": 0,
+      "passed": true
+    },
+    {
+      "family": "driver",
+      "slope": -0.3,
+      "maxFootErrorMetres": 1.9405567153185643e-8,
+      "pausedDriftMetres": 0,
+      "passed": true
+    },
+    {
+      "family": "iron",
+      "slope": 0,
+      "maxFootErrorMetres": 5.321619898912555e-8,
+      "pausedDriftMetres": 0,
+      "passed": true
+    },
+    {
+      "family": "iron",
+      "slope": 0.3,
+      "maxFootErrorMetres": 6.805438901302807e-8,
+      "pausedDriftMetres": 0,
+      "passed": true
+    },
+    {
+      "family": "iron",
+      "slope": -0.3,
+      "maxFootErrorMetres": 1.4996899710961742e-7,
+      "pausedDriftMetres": 0,
+      "passed": true
+    },
+    {
+      "family": "chip",
+      "slope": 0,
+      "maxFootErrorMetres": 2.8102930764439815e-7,
+      "pausedDriftMetres": 0,
+      "passed": true
+    },
+    {
+      "family": "chip",
+      "slope": 0.3,
+      "maxFootErrorMetres": 3.208806124699315e-7,
+      "pausedDriftMetres": 0,
+      "passed": true
+    },
+    {
+      "family": "chip",
+      "slope": -0.3,
+      "maxFootErrorMetres": 1.04681658036343e-7,
+      "pausedDriftMetres": 0,
+      "passed": true
+    },
+    {
+      "family": "putt",
+      "slope": 0,
+      "maxFootErrorMetres": 6.20862155992219e-8,
+      "pausedDriftMetres": 0,
+      "passed": true
+    },
+    {
+      "family": "putt",
+      "slope": 0.3,
+      "maxFootErrorMetres": 5.708240366497641e-8,
+      "pausedDriftMetres": 0,
+      "passed": true
+    },
+    {
+      "family": "putt",
+      "slope": -0.3,
+      "maxFootErrorMetres": 1.73370571315834e-7,
+      "pausedDriftMetres": 0,
+      "passed": true
+    }
+  ],
+  "errors": []
+}

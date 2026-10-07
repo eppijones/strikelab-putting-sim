@@ -2,6 +2,7 @@
   "families": 4,
   "angles": 3,
   "posesPerAngle": 4,
-  "kind": "Rendered authored action poses and slow motion; human coach approval remains pending",
+  "video": "golf-actions.webm",
+  "kind": "Rendered retargeted Mixamo body motions with authored grip/club calibration and slow motion; human coach approval remains pending",
   "errors": []
 }

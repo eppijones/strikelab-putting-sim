@@ -1,9 +1,13 @@
 {
-  "url": "http://127.0.0.1:5175/play/grenland/myhra",
+  "url": "http://127.0.0.1:4175/play/grenland/myhra",
   "kind": "Chrome headless with emulated touch and viewport; not physical iPhone or controller",
   "checks": [
     {
       "name": "mobile scene loads without runtime errors",
+      "passed": true
+    },
+    {
+      "name": "storage quota rejects the shot before scoring or animation and rearms controls",
       "passed": true
     },
     {
@@ -13,6 +17,14 @@
     },
     {
       "name": "reload during flight preserves one accepted shot",
+      "passed": true
+    },
+    {
+      "name": "resume selects a club for the saved approach position",
+      "passed": true
+    },
+    {
+      "name": "active-round wind preference survives reload",
       "passed": true
     },
     {
@@ -28,7 +40,15 @@
       "passed": true
     },
     {
+      "name": "practice wind does not replace active-round conditions",
+      "passed": true
+    },
+    {
       "name": "return from practice restores saved ball",
+      "passed": true
+    },
+    {
+      "name": "return from practice restores the active-round wind",
       "passed": true
     },
     {
@@ -50,6 +70,10 @@
     },
     {
       "name": "journal and scenario survive reload",
+      "passed": true
+    },
+    {
+      "name": "short-green resume selects putter, six-metre range and fine initial strength",
       "passed": true
     },
     {
